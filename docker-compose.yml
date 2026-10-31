@@ -1,0 +1,46 @@
+services:
+  focacal:
+    build: .
+    container_name: focacal
+    restart: unless-stopped
+
+    # Publish all service ports.
+    ports:
+      - "${CALDAV_PORT:-5232}:5232"     # CalDAV — subscribe from Mac Calendar / Google Cal
+      - "${REST_PORT:-5233}:5233"       # REST API — Raycast extension
+      - "${MCP_PORT:-5234}:5234"        # MCP server — optional external clients
+      - "${OAUTH_PORT:-8080}:8080"      # OAuth2 callback — used only during 'focacal auth'
+
+    environment:
+      # Core
+      FOCACAL_DEBUG: "${FOCACAL_DEBUG:-false}"
+
+      # OAuth redirect base — set this to your public domain if deployed.
+      # For local use: http://localhost:8080 (the default)
+      OAUTH_REDIRECT_BASE_URL: "${OAUTH_REDIRECT_BASE_URL:-http://localhost:8080}"
+
+      # Ollama — override with your Ollama instance URL if running separately.
+      OLLAMA_BASE_URL: "${OLLAMA_BASE_URL:-http://host.docker.internal:11434}"
+
+      # Google OAuth credentials (required if you have a google source).
+      GOOGLE_CLIENT_ID: "${GOOGLE_CLIENT_ID:-}"
+      GOOGLE_CLIENT_SECRET: "${GOOGLE_CLIENT_SECRET:-}"
+
+      # Microsoft/Outlook OAuth credentials (required if you have an outlook source).
+      OUTLOOK_CLIENT_ID: "${OUTLOOK_CLIENT_ID:-}"
+      OUTLOOK_CLIENT_SECRET: "${OUTLOOK_CLIENT_SECRET:-}"
+
+    volumes:
+      # Persistent data: SQLite DB, OAuth tokens, ICS cache.
+      - focacal-data:/data
+      # Config file mount — edit on the host, picked up on restart.
+      - ./config.yaml:/data/config.yaml:ro
+
+    # Allows Ollama running on the host (not in Docker) to be reachable
+    # via host.docker.internal on both Mac and Linux.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  focacal-data:
+    name: focacal-data

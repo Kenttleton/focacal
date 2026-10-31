@@ -1,0 +1,78 @@
+<Window
+    x:Class="FocacalTray.SettingsWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <Grid Padding="24" RowSpacing="20" Width="400">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />   <!-- title -->
+            <RowDefinition Height="Auto" />   <!-- connection section -->
+            <RowDefinition Height="Auto" />   <!-- status section -->
+            <RowDefinition Height="Auto" />   <!-- buttons -->
+        </Grid.RowDefinitions>
+
+        <!-- Title -->
+        <TextBlock Grid.Row="0" Text="Settings"
+                   Style="{ThemeResource TitleTextBlockStyle}" />
+
+        <!-- Connection -->
+        <StackPanel Grid.Row="1" Spacing="12">
+            <TextBlock Text="Connection"
+                       Style="{ThemeResource BodyStrongTextBlockStyle}"
+                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+
+            <StackPanel Spacing="4">
+                <TextBlock Text="Server URL" Style="{ThemeResource BodyTextBlockStyle}" />
+                <TextBox x:Name="ServerUrlBox"
+                         PlaceholderText="http://localhost:5233"
+                         InputScope="Url" />
+                <TextBlock x:Name="UrlError"
+                           Text="Enter a valid URL (e.g. http://localhost:5233)"
+                           Foreground="{ThemeResource SystemFillColorCriticalBrush}"
+                           Style="{ThemeResource CaptionTextBlockStyle}"
+                           Visibility="Collapsed" />
+            </StackPanel>
+
+            <StackPanel Spacing="4">
+                <TextBlock Text="Poll interval (seconds)" Style="{ThemeResource BodyTextBlockStyle}" />
+                <NumberBox x:Name="PollBox"
+                           Minimum="10" Maximum="300" SpinButtonPlacementMode="Inline"
+                           SmallChange="10" LargeChange="30" />
+            </StackPanel>
+        </StackPanel>
+
+        <!-- Status -->
+        <StackPanel Grid.Row="2" Spacing="12">
+            <TextBlock Text="Status"
+                       Style="{ThemeResource BodyStrongTextBlockStyle}"
+                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+
+            <Grid ColumnSpacing="8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <Ellipse x:Name="StatusDot" Width="10" Height="10"
+                         VerticalAlignment="Center"
+                         Fill="{ThemeResource SystemFillColorSuccessBrush}" />
+                <TextBlock x:Name="StatusText" Grid.Column="1"
+                           Text="Connected" VerticalAlignment="Center" />
+            </Grid>
+
+            <TextBlock x:Name="ErrorText"
+                       Text=""
+                       Foreground="{ThemeResource SystemFillColorCriticalBrush}"
+                       Style="{ThemeResource CaptionTextBlockStyle}"
+                       Visibility="Collapsed"
+                       TextWrapping="Wrap" />
+        </StackPanel>
+
+        <!-- Buttons -->
+        <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
+            <Button x:Name="CancelButton" Content="Cancel" Click="CancelButton_Click" />
+            <Button x:Name="ApplyButton"  Content="Apply"  Click="ApplyButton_Click"
+                    Style="{ThemeResource AccentButtonStyle}" />
+        </StackPanel>
+
+    </Grid>
+</Window>

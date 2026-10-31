@@ -1,0 +1,389 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Focacal",
+    "version": "1.0.0",
+    "description": "AI-powered calendar focus scheduler. Read your calendar, query focus blocks, trigger replanning, and manage your schedule."
+  },
+  "servers": [
+    { "url": "http://localhost:5233", "description": "Local instance" }
+  ],
+  "paths": {
+    "/today": {
+      "get": {
+        "operationId": "getToday",
+        "summary": "Get today's full agenda",
+        "description": "Returns all real calendar events and AI-planned blocks for today sorted by start time.",
+        "parameters": [
+          {
+            "name": "tz",
+            "in": "query",
+            "description": "IANA timezone name (e.g. America/New_York). Defaults to UTC.",
+            "schema": { "type": "string", "example": "America/New_York" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of events and blocks for today",
+            "content": {
+              "application/json": {
+                "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Event" } }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/now": {
+      "get": {
+        "operationId": "getNow",
+        "summary": "Get the current or next event",
+        "description": "Returns the event or block that is active right now. If nothing is active, returns the next upcoming item. Returns null if the day is empty.",
+        "parameters": [
+          {
+            "name": "tz",
+            "in": "query",
+            "description": "IANA timezone name. Defaults to UTC.",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current or next event, or null",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    { "$ref": "#/components/schemas/Event" },
+                    { "type": "null" }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/events": {
+      "get": {
+        "operationId": "listEvents",
+        "summary": "List real calendar events",
+        "description": "Returns synced calendar events (not AI blocks) for a date range.",
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Range start in RFC 3339. Defaults to start of today.",
+            "schema": { "type": "string", "format": "date-time" }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "Range end in RFC 3339. Defaults to 14 days from now.",
+            "schema": { "type": "string", "format": "date-time" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of calendar events",
+            "content": {
+              "application/json": {
+                "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Event" } }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/blocks": {
+      "get": {
+        "operationId": "listBlocks",
+        "summary": "List AI-planned focus blocks",
+        "description": "Returns focus, lunch, and break blocks planned by the AI for a date range.",
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Range start in RFC 3339. Defaults to start of today.",
+            "schema": { "type": "string", "format": "date-time" }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "Range end in RFC 3339. Defaults to 14 days from now.",
+            "schema": { "type": "string", "format": "date-time" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of planned blocks",
+            "content": {
+              "application/json": {
+                "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Event" } }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createBlock",
+        "summary": "Create a locked focus block",
+        "description": "Creates a user-defined block. Always locked — the AI will not move or delete it on the next replan.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/CreateBlockRequest" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created block",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Event" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/blocks/{id}": {
+      "patch": {
+        "operationId": "updateBlock",
+        "summary": "Update a block",
+        "description": "Update a block's end time, title, or locked status.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "Block ID (as returned in the id field, e.g. focacal-block-{uuid})"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/UpdateBlockRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated block",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Event" }
+              }
+            }
+          },
+          "404": { "description": "Block not found" }
+        }
+      },
+      "delete": {
+        "operationId": "deleteBlock",
+        "summary": "Delete a block",
+        "description": "Permanently removes a block. Locked blocks can be deleted here (this endpoint always succeeds regardless of lock status).",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "204": { "description": "Deleted" },
+          "404": { "description": "Block not found" }
+        }
+      }
+    },
+    "/replan": {
+      "post": {
+        "operationId": "triggerReplan",
+        "summary": "Trigger an AI replan",
+        "description": "Asks the AI agent to regenerate the focus schedule for the next 7 days based on current calendar events.",
+        "responses": {
+          "202": {
+            "description": "Replan accepted and running asynchronously",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": { "status": { "type": "string", "example": "replan triggered" } }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/config": {
+      "get": {
+        "operationId": "getConfig",
+        "summary": "Get scheduling configuration",
+        "description": "Returns the current working hours, lunch window, and focus scheduling settings.",
+        "responses": {
+          "200": {
+            "description": "Current configuration",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Config" }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateConfig",
+        "summary": "Update scheduling configuration",
+        "description": "Patches working hours, lunch window, or focus settings. Changes are written to config.yaml and take effect on the next replan.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/Config" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": { "status": { "type": "string", "example": "saved" } }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "operationId": "getHealth",
+        "summary": "Service health and sync status",
+        "description": "Returns service status, last successful replan time, and per-source sync and webhook state.",
+        "responses": {
+          "200": {
+            "description": "Health status",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Health" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/calendar.ics": {
+      "get": {
+        "operationId": "getCalendarFeed",
+        "summary": "Webcal ICS feed",
+        "description": "Returns the next 14 days of events and AI blocks as a standard iCalendar (ICS) file. Subscribe in any calendar app with webcal://host:5233/calendar.ics",
+        "responses": {
+          "200": {
+            "description": "iCalendar feed",
+            "content": { "text/calendar": { "schema": { "type": "string" } } }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Event": {
+        "type": "object",
+        "properties": {
+          "id":             { "type": "string", "description": "Composite ID. Blocks use prefix focacal-block-{uuid}" },
+          "type":          { "type": "string", "enum": ["real", "focus", "lunch", "break"] },
+          "source":        { "type": "string", "description": "Source calendar ID, or 'focacal' for AI blocks" },
+          "title":         { "type": "string" },
+          "start":         { "type": "string", "format": "date-time" },
+          "end":           { "type": "string", "format": "date-time" },
+          "all_day":       { "type": "boolean" },
+          "conference_url":{ "type": "string", "description": "Zoom / Meet / Teams URL if present" },
+          "locked":        { "type": "boolean", "description": "Locked blocks are skipped by the AI on replan" },
+          "is_now":        { "type": "boolean", "description": "True if this event is currently active" },
+          "minutes_until": { "type": "integer", "description": "Minutes until start. Negative means already started." }
+        },
+        "required": ["id", "type", "source", "title", "start", "end", "is_now", "minutes_until"]
+      },
+      "CreateBlockRequest": {
+        "type": "object",
+        "required": ["start", "end"],
+        "properties": {
+          "type":     { "type": "string", "enum": ["focus", "lunch", "break"], "default": "focus" },
+          "title":    { "type": "string", "default": "Focus block" },
+          "start":    { "type": "string", "format": "date-time" },
+          "end":      { "type": "string", "format": "date-time" },
+          "priority": { "type": "integer", "default": 0 }
+        }
+      },
+      "UpdateBlockRequest": {
+        "type": "object",
+        "properties": {
+          "end":    { "type": "string", "format": "date-time", "description": "New end time" },
+          "title":  { "type": "string" },
+          "locked": { "type": "boolean" }
+        }
+      },
+      "Config": {
+        "type": "object",
+        "properties": {
+          "working_hours": {
+            "type": "object",
+            "properties": {
+              "start":    { "type": "string", "example": "09:00" },
+              "end":      { "type": "string", "example": "18:00" },
+              "timezone": { "type": "string", "example": "America/New_York" }
+            }
+          },
+          "lunch": {
+            "type": "object",
+            "properties": {
+              "preferred":        { "type": "string", "example": "12:00" },
+              "window_start":     { "type": "string", "example": "11:30" },
+              "window_end":       { "type": "string", "example": "13:30" },
+              "duration_minutes": { "type": "integer", "example": 60 }
+            }
+          },
+          "focus": {
+            "type": "object",
+            "properties": {
+              "style":                  { "type": "string", "enum": ["flexible", "pomodoro", "fixed"] },
+              "min_block_minutes":      { "type": "integer", "example": 30 },
+              "max_block_minutes":      { "type": "integer", "example": 120 },
+              "buffer_around_meetings": { "type": "integer", "example": 10 }
+            }
+          }
+        }
+      },
+      "Health": {
+        "type": "object",
+        "properties": {
+          "status":                 { "type": "string", "example": "ok" },
+          "time":                   { "type": "string", "format": "date-time" },
+          "last_successful_replan": { "type": "string", "format": "date-time", "nullable": true },
+          "sources": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "source_id":      { "type": "string" },
+                "last_synced_at": { "type": "string", "format": "date-time" },
+                "webhook_id":     { "type": "string" },
+                "webhook_expiry": { "type": "string", "format": "date-time" }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

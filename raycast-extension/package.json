@@ -1,0 +1,60 @@
+{
+  "name": "focacal",
+  "title": "Focacal",
+  "description": "Today's calendar agenda from focacal — AI-planned focus blocks + real meetings in one view.",
+  "icon": "focacal-icon.png",
+  "author": "you",
+  "categories": ["Productivity"],
+  "license": "MIT",
+  "commands": [
+    {
+      "name": "today",
+      "title": "Today's Agenda",
+      "description": "Show today's events and focus blocks",
+      "mode": "view"
+    },
+    {
+      "name": "now",
+      "title": "What's On Now",
+      "description": "Show the current or next event",
+      "mode": "no-view"
+    },
+    {
+      "name": "replan",
+      "title": "Replan Schedule",
+      "description": "Trigger an immediate AI replan",
+      "mode": "no-view"
+    }
+  ],
+  "preferences": [
+    {
+      "name": "apiBaseUrl",
+      "title": "Focacal API URL",
+      "description": "Base URL of the focacal REST API",
+      "type": "textfield",
+      "default": "http://localhost:5233",
+      "required": false
+    },
+    {
+      "name": "timezone",
+      "title": "Timezone",
+      "description": "Your local timezone (e.g. America/New_York)",
+      "type": "textfield",
+      "default": "America/New_York",
+      "required": false
+    }
+  ],
+  "dependencies": {
+    "@raycast/api": "^1.79.0",
+    "@raycast/utils": "^1.16.0"
+  },
+  "devDependencies": {
+    "@raycast/eslint-config": "^1.0.8",
+    "typescript": "^5.4.5"
+  },
+  "scripts": {
+    "build": "ray build -e dist",
+    "dev": "ray develop",
+    "lint": "ray lint"
+  }
+}

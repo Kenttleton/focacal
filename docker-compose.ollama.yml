@@ -1,0 +1,58 @@
+# docker-compose.ollama.yml — optional Ollama override
+#
+# Use this when you want Ollama managed inside the Compose stack:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.ollama.yml up -d
+#
+# This also pulls the configured model on first start via the init container.
+
+services:
+  focacal:
+    environment:
+      # Point focacal at the in-stack Ollama service instead of host.
+      OLLAMA_BASE_URL: "http://ollama:11434"
+    depends_on:
+      ollama-init:
+        condition: service_completed_successfully
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    restart: unless-stopped
+    volumes:
+      - ollama-models:/root/.ollama
+    # Expose port for external access (e.g. LM Studio, curl).
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    # GPU support — uncomment the deploy block for NVIDIA GPU passthrough.
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  # One-shot init container: pulls the model before focacal starts.
+  ollama-init:
+    image: ollama/ollama:latest
+    container_name: ollama-init
+    restart: "no"
+    volumes:
+      - ollama-models:/root/.ollama
+    depends_on:
+      - ollama
+    environment:
+      OLLAMA_MODEL: "${OLLAMA_MODEL:-qwen2.5:14b}"
+    entrypoint: >
+      sh -c "
+        echo 'Waiting for Ollama to be ready...';
+        until curl -sf http://ollama:11434/api/tags > /dev/null; do sleep 2; done;
+        echo 'Pulling model: $${OLLAMA_MODEL}';
+        ollama pull $${OLLAMA_MODEL};
+        echo 'Model ready.'
+      "
+
+volumes:
+  ollama-models:
+    name: ollama-models

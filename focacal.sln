@@ -1,0 +1,29 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.5.2.0
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "windows-tray", "windows-tray", "{866D22B5-3E16-730F-6C38-0554DC45D996}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FocacalTray", "windows-tray\FocacalTray\FocacalTray.csproj", "{C0D5085E-A597-8AD2-11A2-99871E8F34EE}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{C0D5085E-A597-8AD2-11A2-99871E8F34EE}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C0D5085E-A597-8AD2-11A2-99871E8F34EE}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C0D5085E-A597-8AD2-11A2-99871E8F34EE}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C0D5085E-A597-8AD2-11A2-99871E8F34EE}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{C0D5085E-A597-8AD2-11A2-99871E8F34EE} = {866D22B5-3E16-730F-6C38-0554DC45D996}
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {BE808F0D-CEB1-474C-A3A5-FABCE2BD7BD4}
+	EndGlobalSection
+EndGlobal

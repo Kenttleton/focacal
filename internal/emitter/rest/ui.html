@@ -1,0 +1,660 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Focacal</title>
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 14px;
+  background: #f8fafc;
+  color: #1e293b;
+  min-height: 100vh;
+}
+
+/* ── Header ─────────────────────────────────────────────────────────────── */
+.header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 20px;
+  background: #fff;
+  border-bottom: 1px solid #e2e8f0;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+.header h1 { font-size: 18px; font-weight: 700; color: #0f172a; flex: none; }
+.header .date { font-size: 13px; color: #64748b; flex: 1; }
+.btn {
+  padding: 6px 14px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: opacity .15s;
+}
+.btn:disabled { opacity: .5; cursor: default; }
+.btn-ghost { background: #f1f5f9; color: #475569; border-color: #e2e8f0; }
+.btn-ghost:hover:not(:disabled) { background: #e2e8f0; }
+.btn-primary { background: #4f46e5; color: #fff; }
+.btn-primary:hover:not(:disabled) { background: #4338ca; }
+.btn-danger { background: #ef4444; color: #fff; }
+.btn-danger:hover:not(:disabled) { background: #dc2626; }
+.spinner {
+  display: inline-block;
+  width: 12px; height: 12px;
+  border: 2px solid rgba(255,255,255,.4);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin .7s linear infinite;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Layout ──────────────────────────────────────────────────────────────── */
+.main { display: flex; gap: 0; max-width: 1280px; margin: 0 auto; padding: 20px; }
+.timeline-wrap { flex: 1; min-width: 0; }
+.panel-wrap { width: 320px; flex: none; margin-left: 20px; }
+
+/* ── Timeline ────────────────────────────────────────────────────────────── */
+.timeline-outer {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  overflow: hidden;
+}
+.timeline-header {
+  padding: 12px 16px;
+  border-bottom: 1px solid #e2e8f0;
+  font-weight: 600;
+  font-size: 13px;
+  color: #374151;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.timeline-body { display: flex; }
+
+.hour-col {
+  width: 52px;
+  flex: none;
+  border-right: 1px solid #f1f5f9;
+  position: relative;
+}
+.hour-label {
+  position: absolute;
+  right: 8px;
+  font-size: 11px;
+  color: #94a3b8;
+  transform: translateY(-50%);
+  white-space: nowrap;
+  user-select: none;
+}
+
+.timeline-area {
+  flex: 1;
+  position: relative;
+  cursor: crosshair;
+}
+.grid-line {
+  position: absolute;
+  left: 0; right: 0;
+  height: 1px;
+  background: #f1f5f9;
+  pointer-events: none;
+}
+.grid-line.half { background: #f8fafc; }
+.now-line {
+  position: absolute;
+  left: 0; right: 0;
+  height: 2px;
+  background: #ef4444;
+  z-index: 10;
+  pointer-events: none;
+}
+.now-line::before {
+  content: '';
+  position: absolute;
+  left: -4px;
+  top: -4px;
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  background: #ef4444;
+}
+
+/* ── Blocks ──────────────────────────────────────────────────────────────── */
+.block {
+  position: absolute;
+  left: 4px; right: 4px;
+  border-radius: 6px;
+  padding: 4px 7px;
+  font-size: 12px;
+  overflow: hidden;
+  z-index: 5;
+  transition: box-shadow .1s;
+}
+.block-title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.block-time { font-size: 11px; opacity: .8; margin-top: 1px; }
+
+/* real calendar events */
+.block.event { background: #ede9fe; color: #4c1d95; border: 1px solid #c4b5fd; cursor: default; }
+
+/* AI-planned blocks */
+.block.focus   { background: #dcfce7; color: #14532d; border: 1px solid #86efac; cursor: pointer; }
+.block.lunch   { background: #ffedd5; color: #7c2d12; border: 1px solid #fdba74; cursor: pointer; }
+.block.break   { background: #fef9c3; color: #713f12; border: 1px solid #fde047; cursor: pointer; }
+
+.block.locked  { filter: saturate(1.3); }
+.block.selected { box-shadow: 0 0 0 2px #4f46e5; z-index: 15; }
+.block:hover:not(.event) { box-shadow: 0 0 0 1px #4f46e5; }
+
+/* ── Popover ──────────────────────────────────────────────────────────────── */
+.popover {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.12);
+  padding: 8px;
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  z-index: 50;
+  min-width: 200px;
+}
+.popover .btn { padding: 4px 10px; font-size: 12px; }
+
+/* ── Settings panel ───────────────────────────────────────────────────────── */
+.settings-panel {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  overflow: hidden;
+}
+.settings-header {
+  padding: 12px 16px;
+  border-bottom: 1px solid #e2e8f0;
+  font-weight: 600;
+  font-size: 13px;
+  color: #374151;
+}
+.settings-body { padding: 16px; }
+.field { margin-bottom: 14px; }
+.field label { display: block; font-size: 12px; font-weight: 500; color: #475569; margin-bottom: 4px; }
+.field input, .field select {
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #1e293b;
+  background: #fff;
+}
+.field input:focus, .field select:focus {
+  outline: none;
+  border-color: #4f46e5;
+  box-shadow: 0 0 0 2px rgba(79,70,229,.15);
+}
+.field-row { display: flex; gap: 8px; }
+.field-row .field { flex: 1; }
+.section-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: #94a3b8;
+  margin: 16px 0 8px;
+}
+.section-title:first-child { margin-top: 0; }
+.settings-footer {
+  padding: 12px 16px;
+  border-top: 1px solid #e2e8f0;
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+/* ── Empty state ─────────────────────────────────────────────────────────── */
+.empty-day {
+  padding: 40px 20px;
+  text-align: center;
+  color: #94a3b8;
+  font-size: 13px;
+}
+
+/* ── Legend ──────────────────────────────────────────────────────────────── */
+.legend {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 8px 16px;
+  border-top: 1px solid #f1f5f9;
+}
+.legend-item { display: flex; align-items: center; gap: 5px; font-size: 11px; color: #64748b; }
+.legend-dot { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+
+/* ── Toast ────────────────────────────────────────────────────────────────── */
+.toast {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  background: #1e293b;
+  color: #fff;
+  padding: 10px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+  z-index: 200;
+  box-shadow: 0 4px 12px rgba(0,0,0,.2);
+  animation: slideIn .2s ease;
+}
+@keyframes slideIn { from { transform: translateY(8px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+</style>
+</head>
+<body x-data="focacal()" x-init="init()" @click="selectedId = null">
+
+<!-- Header -->
+<div class="header">
+  <h1>Focacal</h1>
+  <span class="date" x-text="todayLabel()"></span>
+  <button class="btn btn-ghost" @click.stop="showSettings = !showSettings">
+    <span x-text="showSettings ? 'Close' : 'Settings'"></span>
+  </button>
+  <button class="btn btn-primary" @click="replan()" :disabled="replanning">
+    <span x-show="replanning" class="spinner"></span>
+    <span x-text="replanning ? 'Planning…' : 'Replan'"></span>
+  </button>
+</div>
+
+<!-- Main -->
+<div class="main">
+
+  <!-- Timeline -->
+  <div class="timeline-wrap">
+    <div class="timeline-outer">
+      <div class="timeline-header">
+        Today's schedule
+        <span style="margin-left:auto;font-weight:400;color:#94a3b8;font-size:12px">
+          Click empty area to create a block
+        </span>
+      </div>
+
+      <div class="timeline-body">
+        <!-- Hour labels -->
+        <div class="hour-col" :style="`height: ${timelineH}px`">
+          <template x-for="h in hourMarkers" :key="h">
+            <div class="hour-label" :style="`top: ${minuteToY(h*60)}px`" x-text="fmtHour(h)"></div>
+          </template>
+        </div>
+
+        <!-- Timeline area -->
+        <div class="timeline-area" :style="`height: ${timelineH}px`" @click="onTimelineClick($event)">
+
+          <!-- Grid lines -->
+          <template x-for="h in hourMarkers" :key="h">
+            <div class="grid-line" :style="`top: ${minuteToY(h*60)}px`"></div>
+          </template>
+          <!-- Half-hour lines -->
+          <template x-for="h in hourMarkers" :key="'h'+h">
+            <div class="grid-line half" :style="`top: ${minuteToY(h*60+30)}px`"></div>
+          </template>
+
+          <!-- Current time indicator -->
+          <div class="now-line" x-show="nowInWorkDay" :style="`top: ${nowY}px`"></div>
+
+          <!-- Real events -->
+          <template x-for="ev in realEvents" :key="ev.id">
+            <div class="block event"
+              :style="blockStyle(ev)"
+              :title="ev.title + '\n' + fmtRange(ev)">
+              <div class="block-title" x-text="ev.title"></div>
+              <div class="block-time" x-text="fmtRange(ev)"></div>
+            </div>
+          </template>
+
+          <!-- AI blocks -->
+          <template x-for="blk in aiBlocks" :key="blk.id">
+            <div class="block"
+              :class="[blk.type, { locked: blk.locked, selected: selectedId === blk.id }]"
+              :style="blockStyle(blk)"
+              @click.stop="select(blk)">
+              <div class="block-title">
+                <span x-show="blk.locked" title="Locked">🔒 </span>
+                <span x-text="blk.title"></span>
+              </div>
+              <div class="block-time" x-text="fmtRange(blk)"></div>
+
+              <!-- Popover -->
+              <div class="popover" x-show="selectedId === blk.id" @click.stop x-cloak>
+                <button class="btn btn-ghost" @click="adjust(blk, 30)" title="Extend 30 min">+30m</button>
+                <button class="btn btn-ghost" @click="adjust(blk, -30)" title="Shorten 30 min">-30m</button>
+                <button class="btn btn-ghost" @click="adjust(blk, 15)" title="Extend 15 min">+15m</button>
+                <button class="btn btn-ghost" @click="adjust(blk, -15)" title="Shorten 15 min">-15m</button>
+                <button class="btn btn-ghost" @click="toggleLock(blk)" x-text="blk.locked ? '🔓 Unlock' : '🔒 Lock'"></button>
+                <button class="btn btn-danger" @click="remove(blk)">Delete</button>
+              </div>
+            </div>
+          </template>
+
+        </div><!-- /timeline-area -->
+      </div><!-- /timeline-body -->
+
+      <!-- Legend -->
+      <div class="legend">
+        <div class="legend-item"><div class="legend-dot" style="background:#c4b5fd"></div> Meeting</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#86efac"></div> Focus</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#fdba74"></div> Lunch</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#fde047"></div> Break</div>
+        <div class="legend-item">🔒 Locked (replan won't move)</div>
+      </div>
+    </div>
+  </div><!-- /timeline-wrap -->
+
+  <!-- Settings panel -->
+  <div class="panel-wrap" x-show="showSettings" x-cloak>
+    <div class="settings-panel">
+      <div class="settings-header">Settings</div>
+      <div class="settings-body">
+
+        <div class="section-title">Working hours</div>
+        <div class="field-row">
+          <div class="field">
+            <label>Start</label>
+            <input type="time" x-model="cfg.working_hours.start">
+          </div>
+          <div class="field">
+            <label>End</label>
+            <input type="time" x-model="cfg.working_hours.end">
+          </div>
+        </div>
+        <div class="field">
+          <label>Timezone (IANA)</label>
+          <input type="text" x-model="cfg.working_hours.timezone" placeholder="America/New_York">
+        </div>
+
+        <div class="section-title">Lunch</div>
+        <div class="field-row">
+          <div class="field">
+            <label>Window start</label>
+            <input type="time" x-model="cfg.lunch.window_start">
+          </div>
+          <div class="field">
+            <label>Window end</label>
+            <input type="time" x-model="cfg.lunch.window_end">
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label>Preferred time</label>
+            <input type="time" x-model="cfg.lunch.preferred">
+          </div>
+          <div class="field">
+            <label>Duration (min)</label>
+            <input type="number" min="15" max="120" x-model.number="cfg.lunch.duration_minutes">
+          </div>
+        </div>
+
+        <div class="section-title">Focus blocks</div>
+        <div class="field">
+          <label>Style</label>
+          <select x-model="cfg.focus.style">
+            <option value="flexible">Flexible</option>
+            <option value="pomodoro">Pomodoro (25+5)</option>
+            <option value="fixed">Fixed length</option>
+          </select>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label>Min (min)</label>
+            <input type="number" min="5" max="120" x-model.number="cfg.focus.min_block_minutes">
+          </div>
+          <div class="field">
+            <label>Max (min)</label>
+            <input type="number" min="15" max="240" x-model.number="cfg.focus.max_block_minutes">
+          </div>
+        </div>
+        <div class="field">
+          <label>Buffer around meetings (min)</label>
+          <input type="number" min="0" max="60" x-model.number="cfg.focus.buffer_around_meetings">
+        </div>
+
+      </div><!-- /settings-body -->
+      <div class="settings-footer">
+        <button class="btn btn-ghost" @click="loadConfig()">Reset</button>
+        <button class="btn btn-primary" @click="saveSettings()">Save</button>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /main -->
+
+<!-- Toast -->
+<div class="toast" x-show="toast" x-text="toast" x-cloak
+  style="transition: opacity .3s" :style="toast ? 'opacity:1' : 'opacity:0'"></div>
+
+<script>
+function focacal() {
+  return {
+    items: [],          // raw /today response
+    cfg: {
+      working_hours: { start: '09:00', end: '18:00', timezone: 'UTC' },
+      lunch: { preferred: '12:00', window_start: '11:30', window_end: '13:30', duration_minutes: 60 },
+      focus: { style: 'flexible', min_block_minutes: 30, max_block_minutes: 120, buffer_around_meetings: 10 },
+    },
+    replanning: false,
+    showSettings: false,
+    selectedId: null,
+    toast: '',
+    _toastTimer: null,
+    now: new Date(),
+
+    // ── Init ──────────────────────────────────────────────────────────────
+    async init() {
+      await this.loadConfig()
+      await this.loadDay()
+      setInterval(() => { this.now = new Date() }, 30000)
+      setInterval(() => this.loadDay(), 30000)
+    },
+
+    async loadDay() {
+      try {
+        const tz = encodeURIComponent(this.cfg.working_hours?.timezone || 'UTC')
+        const r = await fetch(`/today?tz=${tz}`)
+        if (r.ok) this.items = await r.json()
+      } catch (_) {}
+    },
+
+    async loadConfig() {
+      try {
+        const r = await fetch('/config')
+        if (r.ok) this.cfg = await r.json()
+      } catch (_) {}
+    },
+
+    // ── Derived data ──────────────────────────────────────────────────────
+    get realEvents() { return (this.items || []).filter(i => i.type === 'real') },
+    get aiBlocks()   { return (this.items || []).filter(i => i.type !== 'real') },
+
+    get workStartMin() {
+      const [h, m] = (this.cfg.working_hours?.start || '09:00').split(':').map(Number)
+      return h * 60 + m
+    },
+    get workEndMin() {
+      const [h, m] = (this.cfg.working_hours?.end || '18:00').split(':').map(Number)
+      return h * 60 + m
+    },
+    get workSpan() { return this.workEndMin - this.workStartMin },
+    get timelineH() { return Math.max(400, this.workSpan) }, // 1px per minute
+
+    get hourMarkers() {
+      const start = Math.ceil(this.workStartMin / 60)
+      const end   = Math.floor(this.workEndMin  / 60)
+      const hrs = []
+      for (let h = start; h <= end; h++) hrs.push(h)
+      return hrs
+    },
+
+    // ── Time helpers ──────────────────────────────────────────────────────
+    minuteToY(totalMin) {
+      return (totalMin - this.workStartMin)
+    },
+    isoToY(iso) {
+      const d = new Date(iso)
+      return this.minuteToY(d.getHours() * 60 + d.getMinutes())
+    },
+    isoToH(iso) {
+      const d = new Date(iso)
+      return (new Date(iso) - new Date(iso.slice(0,10))) / 60000 // minutes since midnight UTC
+    },
+    durationMin(start, end) {
+      return (new Date(end) - new Date(start)) / 60000
+    },
+
+    get nowInWorkDay() {
+      const m = this.now.getHours() * 60 + this.now.getMinutes()
+      return m >= this.workStartMin && m <= this.workEndMin
+    },
+    get nowY() {
+      return this.minuteToY(this.now.getHours() * 60 + this.now.getMinutes())
+    },
+
+    blockStyle(item) {
+      const top  = this.isoToY(item.start)
+      const h    = Math.max(18, this.durationMin(item.start, item.end))
+      return `top:${top}px; height:${h}px;`
+    },
+
+    fmtHour(h) {
+      if (h === 0) return '12 AM'
+      if (h < 12) return `${h} AM`
+      if (h === 12) return '12 PM'
+      return `${h - 12} PM`
+    },
+    fmtTime(iso) {
+      const d = new Date(iso)
+      const h = d.getHours(), m = d.getMinutes()
+      const hh = h % 12 || 12
+      const mm = String(m).padStart(2,'0')
+      return `${hh}:${mm} ${h < 12 ? 'AM' : 'PM'}`
+    },
+    fmtRange(item) {
+      return `${this.fmtTime(item.start)} – ${this.fmtTime(item.end)}`
+    },
+    todayLabel() {
+      return new Date().toLocaleDateString(undefined, { weekday:'long', month:'long', day:'numeric' })
+    },
+
+    // ── Block actions ─────────────────────────────────────────────────────
+    select(blk) {
+      this.selectedId = this.selectedId === blk.id ? null : blk.id
+    },
+
+    async adjust(blk, deltaMin) {
+      const newEnd = new Date(new Date(blk.end).getTime() + deltaMin * 60000)
+      if (newEnd <= new Date(blk.start)) { this.showToast('Block must be at least 1 minute long'); return }
+      await this.patchBlock(blk.id, { end: newEnd.toISOString() })
+    },
+
+    async toggleLock(blk) {
+      await this.patchBlock(blk.id, { locked: !blk.locked })
+      this.showToast(blk.locked ? 'Block unlocked' : 'Block locked — replan won\'t move it')
+    },
+
+    async remove(blk) {
+      const id = blk.id.replace('focacal-block-', '')
+      await fetch(`/blocks/${id}`, { method: 'DELETE' })
+      this.selectedId = null
+      await this.loadDay()
+    },
+
+    async patchBlock(fullID, patch) {
+      const id = fullID.replace('focacal-block-', '')
+      await fetch(`/blocks/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      })
+      this.selectedId = null
+      await this.loadDay()
+    },
+
+    // Click on empty timeline area → create a 30-min locked focus block
+    async onTimelineClick(e) {
+      // Ignore if clicking on an existing block
+      if (e.target !== e.currentTarget) return
+      const rect = e.currentTarget.getBoundingClientRect()
+      const clickMin = Math.round(((e.clientY - rect.top) + this.workStartMin) / 15) * 15
+      if (clickMin < this.workStartMin || clickMin >= this.workEndMin) return
+
+      const today = new Date()
+      const y = today.getFullYear(), mo = today.getMonth(), d = today.getDate()
+      const start = new Date(y, mo, d, Math.floor(clickMin/60), clickMin%60)
+      const end   = new Date(start.getTime() + 30 * 60000)
+
+      await fetch('/blocks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'focus',
+          title: 'Focus block',
+          start: start.toISOString(),
+          end: end.toISOString(),
+        }),
+      })
+      await this.loadDay()
+      this.showToast('Block created')
+    },
+
+    // ── Replan ────────────────────────────────────────────────────────────
+    async replan() {
+      this.replanning = true
+      try {
+        await fetch('/replan', { method: 'POST' })
+        // Poll for up to 5 minutes until items change
+        const before = JSON.stringify(this.items)
+        const deadline = Date.now() + 300_000
+        while (Date.now() < deadline) {
+          await new Promise(r => setTimeout(r, 3000))
+          await this.loadDay()
+          if (JSON.stringify(this.items) !== before) break
+        }
+        this.showToast('Schedule updated')
+      } finally {
+        this.replanning = false
+      }
+    },
+
+    // ── Settings ───────────────────────────────────────────────────────────
+    async saveSettings() {
+      const r = await fetch('/config', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(this.cfg),
+      })
+      if (r.ok) {
+        this.showSettings = false
+        this.showToast('Settings saved — takes effect on next replan')
+      } else {
+        this.showToast('Failed to save settings')
+      }
+    },
+
+    // ── Toast ─────────────────────────────────────────────────────────────
+    showToast(msg) {
+      this.toast = msg
+      clearTimeout(this._toastTimer)
+      this._toastTimer = setTimeout(() => { this.toast = '' }, 3000)
+    },
+  }
+}
+</script>
+</body>
+</html>

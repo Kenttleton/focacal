@@ -1,0 +1,83 @@
+# focacal configuration
+# Place this file at ./config.yaml next to docker-compose.yml
+# It is mounted into the container at /data/config.yaml (read-only).
+#
+# Sensitive values (OAuth credentials, Ollama URL) belong in .env, not here.
+# This file is safe to commit to version control.
+
+working_hours:
+  start: "09:00"
+  end: "18:00"
+  timezone: "America/New_York"   # IANA timezone name
+
+lunch:
+  preferred: "12:00"             # ideal lunch start time
+  window_start: "11:30"         # earliest acceptable lunch start
+  window_end: "13:30"           # latest acceptable lunch start
+  duration_minutes: 60
+
+focus:
+  # Style options:
+  #   flexible  — AI fills gaps intelligently, varying block lengths
+  #   pomodoro  — 25-min work blocks with 5-min breaks
+  #   fixed     — blocks of exactly max_block_minutes
+  style: "flexible"
+  min_block_minutes: 30          # ignore gaps shorter than this
+  max_block_minutes: 120         # split longer gaps at this boundary
+  buffer_around_meetings: 10     # minutes of buffer before/after meetings
+
+ollama:
+  # base_url and model are also configurable via OLLAMA_BASE_URL / OLLAMA_MODEL env vars.
+  base_url: "http://host.docker.internal:11434"
+  model: "qwen2.5:14b"
+  context_window: 32768          # larger context = better multi-day reasoning
+  timeout_secs: 120
+
+# Calendar sources — add one entry per Google or Outlook account.
+sources:
+  - id: "work-google"            # unique slug — used in logs and writeback keys
+    type: "google"
+    writeback: true              # write AI-planned blocks back to this calendar
+    cross_busy: false            # show events from other sources as "Busy" here
+    calendar_ids: []             # empty = primary calendar only
+
+  # - id: "personal-outlook"
+  #   type: "outlook"
+  #   writeback: false
+  #   cross_busy: true
+  #   calendar_ids: []
+
+# Controls how AI-planned blocks appear on source calendars (when writeback: true).
+writeback:
+  cross_busy_title: "Meeting"    # title for cross-calendar busy blocks
+
+  focus:
+    enabled: true
+    title: "Focus time"
+    show_as: "busy"              # busy | free | tentative
+    description: ""              # leave blank to omit description
+
+  lunch:
+    enabled: true
+    title: "Lunch"
+    show_as: "free"
+    description: ""
+
+  break:
+    enabled: false               # set true to also write short breaks
+    title: "Break"
+    show_as: "free"
+    description: ""
+
+# Internal server ports — these are container-internal ports.
+# To change the HOST port, set CALDAV_PORT / REST_PORT / MCP_PORT in .env.
+server:
+  caldav_port: 5232
+  rest_port: 5233
+  mcp_port: 5234
+  oauth_port: 8080
+  bind_address: "0.0.0.0"
+
+oauth:
+  # Also configurable via OAUTH_REDIRECT_BASE_URL env var.
+  redirect_base_url: "http://localhost:8080"

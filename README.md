@@ -1,0 +1,381 @@
+# focacal
+
+AI-powered calendar focus scheduler. Aggregates Google Calendar and Outlook,
+uses a local Ollama model to plan focus blocks and lunch, and serves everything
+as a CalDAV feed and REST API.
+
+**fo-ca-cal** — focus · calendar · AI.
+
+---
+
+## How it works
+
+1. focacal pulls events from your Google and Outlook calendars on startup and every 5 minutes (plus webhook push when available).
+2. A local Ollama model (Qwen 2.5 recommended) uses MCP tools to read your calendar and preferences, then plans focus blocks and lunch around your meetings.
+3. The planned schedule is served as a CalDAV calendar that Mac Calendar, Google Calendar, and any other CalDAV client can subscribe to.
+4. A REST API at `:5233` powers the Raycast extension.
+5. Optionally, AI-planned blocks are written back to your real source calendars so coworkers see you as busy.
+
+---
+
+## Requirements
+
+- Docker (with Compose v2)
+- Ollama running somewhere (locally, on another machine, or in the same Compose stack)
+- Google and/or Microsoft OAuth app credentials
+
+---
+
+## Quick start
+
+### 1. Clone and configure
+
+```bash
+git clone https://github.com/you/focacal.git
+cd focacal
+cp .env.example .env
+```
+
+Edit `.env` and fill in your OAuth credentials. See [OAuth setup](#oauth-setup) below.
+
+Copy `config.yaml` and edit your working hours, timezone, and sources:
+
+```bash
+# config.yaml is already present — edit it directly
+```
+
+### 2. Start the stack
+
+**Option A — Ollama runs separately (already installed locally or remotely):**
+
+```bash
+# Set OLLAMA_BASE_URL in .env to point at your Ollama instance
+docker compose up -d
+```
+
+**Option B — Ollama managed by Compose (pulls the model automatically):**
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.ollama.yml up -d
+```
+
+The Ollama override pulls `qwen2.5:14b` on first start. This may take a few minutes.
+
+### 3. Authorize calendar sources
+
+Install the CLI wrapper so you can run focacal commands from your host:
+
+```bash
+chmod +x focacal.sh
+sudo cp focacal.sh /usr/local/bin/focacal
+```
+
+Authorize each source listed in `config.yaml`:
+
+```bash
+focacal auth google work-google
+# Opens browser → complete OAuth consent → token stored in Docker volume
+```
+
+```bash
+focacal auth outlook personal-outlook
+```
+
+### 4. Trigger the first sync
+
+```bash
+focacal sync
+```
+
+focacal syncs all sources, runs the AI planner, and updates the CalDAV feed.
+Subsequent syncs happen automatically every 5 minutes and on webhook notifications.
+
+### 5. Subscribe your calendar apps
+
+**Mac Calendar:**
+1. Calendar → File → New Calendar Subscription
+2. URL: `http://localhost:5232/focacal/calendar/`
+3. Set refresh to "Every 5 minutes"
+
+**Google Calendar:**
+1. Other calendars → `+` → From URL
+2. URL: `http://localhost:5232/focacal/calendar/`
+
+Both apps will show your real meetings and AI-planned focus/lunch blocks in one unified calendar.
+
+### 6. Install the Raycast extension
+
+```bash
+cd raycast-extension
+npm install
+npm run dev     # opens Raycast in development mode
+```
+
+Or build and sideload:
+
+```bash
+npm run build
+```
+
+In Raycast: Extensions → `+` → Import Extension → select `raycast-extension/`.
+
+Set the API URL preference to `http://localhost:5233` (the default).
+
+---
+
+## CLI reference
+
+All commands run inside the container via the `focacal.sh` wrapper:
+
+| Command | Description |
+|---|---|
+| `focacal start` | Start all services (this is the container's default CMD) |
+| `focacal auth google <source-id>` | Authorize a Google Calendar source |
+| `focacal auth outlook <source-id>` | Authorize an Outlook source |
+| `focacal sync` | Trigger an immediate sync + replan |
+| `focacal status` | Check service health |
+
+---
+
+## OAuth setup
+
+### Google Calendar
+
+1. Go to [Google Cloud Console](https://console.cloud.google.com/apis/credentials)
+2. Create a project → Enable the **Google Calendar API**
+3. Create an OAuth 2.0 Client ID (type: **Web application**)
+4. Add authorized redirect URI: `http://localhost:8080/oauth/callback/google`
+   - For deployed instances: `https://yourdomain.com/oauth/callback/google`
+5. Copy the Client ID and Secret into `.env`
+
+### Microsoft Outlook / M365
+
+1. Go to [Azure App Registrations](https://portal.azure.com/#blade/Microsoft_AAD_RegisteredApps)
+2. New registration → Accounts in any organizational directory + personal Microsoft accounts
+3. Add redirect URI (Web): `http://localhost:8080/oauth/callback/outlook`
+4. API permissions → Add `Calendars.Read` (and `Calendars.ReadWrite` if writeback is enabled)
+5. Certificates & secrets → New client secret
+6. Copy the Application (client) ID and secret into `.env`
+
+---
+
+## Configuration reference
+
+`config.yaml` controls all non-secret settings. Changes take effect on container restart.
+
+### Working hours
+
+```yaml
+working_hours:
+  start: "09:00"
+  end: "18:00"
+  timezone: "America/New_York"   # any IANA timezone name
+```
+
+### Focus block style
+
+```yaml
+focus:
+  style: "flexible"          # flexible | pomodoro | fixed
+  min_block_minutes: 30      # ignore gaps shorter than this
+  max_block_minutes: 120     # split longer gaps here
+  buffer_around_meetings: 10 # minutes of breathing room around meetings
+```
+
+### Lunch
+
+```yaml
+lunch:
+  preferred: "12:00"
+  window_start: "11:30"
+  window_end: "13:30"
+  duration_minutes: 60
+```
+
+### Sources
+
+```yaml
+sources:
+  - id: "work-google"
+    type: "google"             # google | outlook
+    writeback: true            # write AI blocks back to this calendar
+    cross_busy: false          # show other-source events as "Busy" here
+    calendar_ids: []           # empty = primary calendar only
+```
+
+### Write-back
+
+```yaml
+writeback:
+  cross_busy_title: "Meeting"  # title for cross-calendar busy placeholders
+
+  focus:
+    enabled: true
+    title: "Focus time"
+    show_as: "busy"            # busy | free | tentative
+
+  lunch:
+    enabled: true
+    title: "Lunch"
+    show_as: "free"
+
+  break:
+    enabled: false
+```
+
+---
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────┐
+│ Docker Compose                                           │
+│                                                          │
+│  ┌──────────────────────────────────────────────────┐   │
+│  │ focacal container                                 │   │
+│  │                                                   │   │
+│  │  Connectors ──► Event bus ──► SQLite store       │   │
+│  │  (Google, Outlook)    (debounce)                  │   │
+│  │                                 │                 │   │
+│  │                           MCP server :5234        │   │
+│  │                                 │                 │   │
+│  │                         Ollama agent              │   │
+│  │                       (tool-use loop)             │   │
+│  │                                 │                 │   │
+│  │            ┌────────────────────┼──────────┐      │   │
+│  │            ▼                    ▼          ▼      │   │
+│  │      CalDAV :5232        REST :5233   Write-back  │   │
+│  └──────────────────────────────────────────────────┘   │
+│                                                          │
+│  ┌──────────────────┐  (optional)                        │
+│  │ ollama container │◄── focacal agent calls tools       │
+│  │ :11434           │                                    │
+│  └──────────────────┘                                    │
+└─────────────────────────────────────────────────────────┘
+
+Consumers:
+  Mac Calendar / Google Cal ──► subscribe to CalDAV :5232
+  Raycast extension         ──► polls REST API :5233
+  Claude Desktop / other    ──► MCP client on :5234
+```
+
+### Key design decisions
+
+**Single binary, multiple goroutines.** All services (CalDAV, REST, MCP, sync loop) run in one container process. SQLite handles the single-writer constraint cleanly.
+
+**MCP as the AI interface.** The Ollama model never calls Google or Outlook APIs directly — it calls focacal's MCP tools (`focacal_list_events`, `focacal_get_free_gaps`, `focacal_write_block`, etc.). This keeps the model's job simple: reason about schedules, call tools, done.
+
+**Meetings always win.** When a new meeting appears that overlaps a planned focus block, the planner removes or trims the block on the next replan cycle. The AI is instructed to never place blocks over existing events.
+
+**Sanitized write-back.** Events written to source calendars as "cross-busy" blocks have their titles replaced with "Meeting", descriptions and video links stripped, and attendees removed. AI-planned blocks use configurable titles and show-as values.
+
+---
+
+## Development
+
+### First-time Go setup (outside Docker)
+
+```bash
+go mod tidy          # generates go.sum, downloads dependencies
+go build ./...       # verifies the build
+```
+
+### Run locally without Docker
+
+```bash
+# Start Ollama separately
+ollama serve
+
+# Create /data directory for the SQLite store
+mkdir -p /data
+
+# Copy config
+cp config.yaml /data/config.yaml
+
+# Run
+go run . start
+```
+
+### Project layout
+
+```
+focacal/
+├── cmd/                        # cobra CLI commands
+│   ├── root.go                 # viper init, global flags
+│   ├── start.go                # launches all services
+│   └── auth.go                 # OAuth flow + sync/status commands
+├── internal/
+│   ├── config/                 # typed config struct + viper defaults
+│   ├── connector/
+│   │   ├── connector.go        # Connector interface
+│   │   ├── google/             # Google Calendar OAuth + sync + write-back
+│   │   └── outlook/            # Outlook Graph API OAuth + sync
+│   ├── store/                  # SQLite: events, blocks, sync state, tokens
+│   ├── bus/                    # in-process pub/sub with debounce
+│   ├── mcp/                    # MCP server + tool implementations + Ollama agent
+│   └── emitter/
+│       ├── caldav/             # RFC 4791 CalDAV server (real + AI events merged)
+│       ├── rest/               # REST API for Raycast + external clients
+│       └── writeback/          # writes blocks/busy back to source calendars
+├── raycast-extension/          # TypeScript Raycast extension
+├── Dockerfile
+├── docker-compose.yml
+├── docker-compose.ollama.yml   # optional: Ollama in-stack
+├── config.yaml                 # non-secret configuration (safe to commit)
+├── .env.example                # secret template (never commit .env)
+└── focacal.sh                  # host-side CLI wrapper
+```
+
+---
+
+## MCP tools reference
+
+External MCP clients (Claude Desktop, custom scripts) can connect to `:5234`:
+
+| Tool | Description |
+|---|---|
+| `focacal_list_events` | List real calendar events in a date range |
+| `focacal_get_free_gaps` | Compute free slots for a specific date |
+| `focacal_write_block` | Create a focus/lunch/break block |
+| `focacal_delete_block` | Remove a planned block |
+| `focacal_list_blocks` | List all AI-planned blocks in a date range |
+| `focacal_get_preferences` | Read user scheduling preferences |
+| `focacal_trigger_emitters` | Push current state to all outputs |
+
+---
+
+## Ports
+
+| Port | Service | Notes |
+|---|---|---|
+| `5232` | CalDAV server | Subscribe from Mac Calendar / Google Calendar |
+| `5233` | REST API | Raycast extension, curl, custom clients |
+| `5234` | MCP server | Claude Desktop, external MCP clients (optional) |
+| `8080` | OAuth callback | Used only during `focacal auth` — safe to close otherwise |
+
+Override host-side port mappings in `.env` (e.g. `CALDAV_PORT=5232`).
+
+---
+
+## Troubleshooting
+
+**`focacal auth` doesn't open a browser**
+The CLI prints the auth URL — copy it into your browser manually.
+
+**Events not appearing in CalDAV feed**
+Run `focacal sync` and check `docker compose logs focacal` for sync errors.
+Ensure the source is authorized (`focacal auth` completed successfully).
+
+**Ollama model not responding**
+Check `OLLAMA_BASE_URL` in `.env`. Test with:
+```bash
+curl http://localhost:11434/api/tags
+```
+
+**CalDAV subscription shows empty in Mac Calendar**
+Mac Calendar requires the CalDAV URL to respond correctly to PROPFIND.
+Try subscribing to `http://localhost:5232/focacal/calendar/` (trailing slash matters).
+
+**Raycast extension shows "focacal unreachable"**
+Verify the container is running: `docker compose ps`
+Check the REST API: `curl http://localhost:5233/health`

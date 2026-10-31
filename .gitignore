@@ -1,0 +1,28 @@
+# Secrets — never commit
+.env
+*.db
+*.db-shm
+*.db-wal
+
+# OAuth tokens persisted to disk (if ever written outside the volume)
+*.token.json
+
+# Build output
+/focacal
+dist/
+
+# Go
+vendor/
+
+# Raycast extension
+raycast-extension/node_modules/
+raycast-extension/dist/
+
+# macOS
+.DS_Store
+
+# Local assistant session notes
+.remember/
+
+# Docker
+docker-compose.override.yml
