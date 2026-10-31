@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/you/focacal/internal/connector"
-	"github.com/you/focacal/internal/httpclient"
+	"github.com/Kenttleton/focacal/internal/connector"
+	"github.com/Kenttleton/focacal/internal/httpclient"
 )
 
 // RegisterWebhook registers a Google Calendar push notification channel.

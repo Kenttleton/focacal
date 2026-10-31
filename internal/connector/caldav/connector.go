@@ -6,8 +6,8 @@ import (
 
 	"github.com/emersion/go-webdav"
 	gocaldav "github.com/emersion/go-webdav/caldav"
-	"github.com/you/focacal/internal/config"
-	"github.com/you/focacal/internal/store"
+	"github.com/Kenttleton/focacal/internal/config"
+	"github.com/Kenttleton/focacal/internal/store"
 )
 
 // Connector implements connector.Connector for CalDAV sources (iCloud, Nextcloud,

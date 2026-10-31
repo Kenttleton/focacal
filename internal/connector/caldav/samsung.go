@@ -3,8 +3,8 @@ package caldav
 import (
 	"fmt"
 
-	"github.com/you/focacal/internal/config"
-	"github.com/you/focacal/internal/store"
+	"github.com/Kenttleton/focacal/internal/config"
+	"github.com/Kenttleton/focacal/internal/store"
 )
 
 // NewForSamsung creates a CalDAV connector pre-configured for Samsung Calendar.

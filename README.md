@@ -31,7 +31,7 @@ as a CalDAV feed and REST API.
 ### 1. Clone and configure
 
 ```bash
-git clone https://github.com/you/focacal.git
+git clone https://github.com/Kenttleton/focacal.git
 cd focacal
 cp .env.example .env
 ```

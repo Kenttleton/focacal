@@ -3,8 +3,8 @@ package connector
 import (
 	"context"
 
-	"github.com/you/focacal/internal/config"
-	"github.com/you/focacal/internal/store"
+	"github.com/Kenttleton/focacal/internal/config"
+	"github.com/Kenttleton/focacal/internal/store"
 )
 
 // Connector is implemented by each calendar provider (Google, Outlook, …).

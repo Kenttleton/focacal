@@ -7,7 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
-	"github.com/you/focacal/internal/config"
+	"github.com/Kenttleton/focacal/internal/config"
 )
 
 var cfgFile string

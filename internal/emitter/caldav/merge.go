@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/you/focacal/internal/store"
+	"github.com/Kenttleton/focacal/internal/store"
 )
 
 const icsTimeFormat = "20060102T150405Z"

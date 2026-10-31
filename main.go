@@ -1,6 +1,6 @@
 package main
 
-import "github.com/you/focacal/cmd"
+import "github.com/Kenttleton/focacal/cmd"
 
 func main() {
 	cmd.Execute()

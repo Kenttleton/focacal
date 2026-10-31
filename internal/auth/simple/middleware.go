@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/you/focacal/internal/config"
+	"github.com/Kenttleton/focacal/internal/config"
 )
 
 // Middleware returns an HTTP middleware that enforces the static API key

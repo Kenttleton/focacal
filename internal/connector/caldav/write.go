@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/emersion/go-ical"
-	"github.com/you/focacal/internal/connector"
+	"github.com/Kenttleton/focacal/internal/connector"
 )
 
 // RegisterWebhook is a no-op for CalDAV sources — push notifications are not

@@ -8,9 +8,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/you/focacal/internal/connector"
-	"github.com/you/focacal/internal/httpclient"
-	"github.com/you/focacal/internal/store"
+	"github.com/Kenttleton/focacal/internal/connector"
+	"github.com/Kenttleton/focacal/internal/httpclient"
+	"github.com/Kenttleton/focacal/internal/store"
 )
 
 // Sync performs a full or incremental sync of Outlook calendar events.

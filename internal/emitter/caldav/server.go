@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/you/focacal/internal/store"
+	"github.com/Kenttleton/focacal/internal/store"
 )
 
 // Server serves a CalDAV endpoint that merges real events and AI-planned blocks

@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/you/focacal/internal/config"
-	"github.com/you/focacal/internal/connector"
-	"github.com/you/focacal/internal/store"
+	"github.com/Kenttleton/focacal/internal/config"
+	"github.com/Kenttleton/focacal/internal/connector"
+	"github.com/Kenttleton/focacal/internal/store"
 )
 
 // Emitter writes AI-planned blocks and cross-calendar busy blocks back to

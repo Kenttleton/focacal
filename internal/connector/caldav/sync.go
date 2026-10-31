@@ -9,7 +9,7 @@ import (
 
 	"github.com/emersion/go-ical"
 	gocaldav "github.com/emersion/go-webdav/caldav"
-	"github.com/you/focacal/internal/store"
+	"github.com/Kenttleton/focacal/internal/store"
 )
 
 // Sync performs a full sync of CalDAV events into the store.

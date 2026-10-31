@@ -12,8 +12,8 @@ import (
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 
-	"github.com/you/focacal/internal/config"
-	"github.com/you/focacal/internal/store"
+	"github.com/Kenttleton/focacal/internal/config"
+	"github.com/Kenttleton/focacal/internal/store"
 )
 
 const (

@@ -1,4 +1,4 @@
-module github.com/you/focacal
+module github.com/Kenttleton/focacal
 
 go 1.23
 

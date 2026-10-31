@@ -17,11 +17,11 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/spf13/viper"
-	"github.com/you/focacal/internal/bus"
-	"github.com/you/focacal/internal/config"
-	"github.com/you/focacal/internal/connector"
-	caldavemitter "github.com/you/focacal/internal/emitter/caldav"
-	"github.com/you/focacal/internal/store"
+	"github.com/Kenttleton/focacal/internal/bus"
+	"github.com/Kenttleton/focacal/internal/config"
+	"github.com/Kenttleton/focacal/internal/connector"
+	caldavemitter "github.com/Kenttleton/focacal/internal/emitter/caldav"
+	"github.com/Kenttleton/focacal/internal/store"
 )
 
 // HealthState tracks runtime metrics that GET /health exposes.
