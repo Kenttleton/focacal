@@ -14,6 +14,16 @@ dist/
 # Go
 vendor/
 
+# .NET (windows-tray)
+bin/
+obj/
+.vs/
+*.user
+
+# Xcode (mac-menubar)
+xcuserdata/
+DerivedData/
+
 # Raycast extension
 raycast-extension/node_modules/
 raycast-extension/dist/
