@@ -18,6 +18,7 @@ import (
 	"github.com/Kenttleton/focacal/internal/connector"
 	caldavconn "github.com/Kenttleton/focacal/internal/connector/caldav"
 	googleconn "github.com/Kenttleton/focacal/internal/connector/google"
+	icsconn "github.com/Kenttleton/focacal/internal/connector/ics"
 	outlookconn "github.com/Kenttleton/focacal/internal/connector/outlook"
 	"github.com/Kenttleton/focacal/internal/emitter/caldav"
 	"github.com/Kenttleton/focacal/internal/emitter/rest"
@@ -77,6 +78,13 @@ func runStart(_ *cobra.Command, _ []string) error {
 			c, err := caldavconn.New(src, db)
 			if err != nil {
 				log.Warn("init caldav connector", "id", src.ID, "err", err)
+				continue
+			}
+			connectors[src.ID] = c
+		case "ics":
+			c, err := icsconn.New(src, db)
+			if err != nil {
+				log.Warn("init ics connector", "id", src.ID, "err", err)
 				continue
 			}
 			connectors[src.ID] = c
