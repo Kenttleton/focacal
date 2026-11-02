@@ -18,8 +18,44 @@ One codebase, two shells. Web build talks to REST API; desktop build uses Wails 
 - Backend bindings call into existing `internal/` packages directly (store, config, calendar, conflict) via Wails-bound Go methods, OR call the REST API. Prefer direct bindings for desktop (no HTTP hop); keep REST for web/external clients.
 - Reuse the existing REST handlers as the contract for DTOs.
 
+## Contracts & TDD (idiomatic Go)
+Before scaffolding, define and test these:
+
+### Wails-bound service (Go)
+```go
+type UIService struct {
+    store  store.Store
+    cfg    *config.UserConfig
+    remote *RemoteClient // nil in local mode
+}
+func (s *UIService) Events(ctx context.Context, from, to time.Time) ([]rest.EventDTO, error)
+func (s *UIService) Conflicts(ctx context.Context, from, to time.Time) ([]ConflictDTO, error)
+func (s *UIService) DismissConflict(ctx context.Context, key string) error
+func (s *UIService) Sources(ctx context.Context) ([]SourceDTO, error)
+func (s *UIService) Destinations(ctx context.Context) ([]config.DestinationConfig, error)
+func (s *UIService) PutSources(ctx context.Context, list []config.SourceConfig) error
+func (s *UIService) PutDestinations(ctx context.Context, list []config.DestinationConfig) error
+func (s *UIService) BackendMode(ctx context.Context) string // "local" | "remote"
+func (s *UIService) SetBackend(ctx context.Context, url, apiKey string) error
+```
+- Local mode: bind directly to store/config (no HTTP).
+- Remote mode: delegate to REST client; same DTOs.
+- Tests: `internal/ui/service_test.go` using in-memory store + temp config; table-driven.
+
+### Error handling
+- Return wrapped errors: `fmt.Errorf("ui: <op>: %w", err)`.
+- Sentinel: `ErrNoConfigFile`, `ErrRemoteUnreachable`.
+- UI maps to toast via error string; no panics.
+
+### Context injection
+- Local mode injects store/config at startup (mirrors cmd/start.go).
+- Remote mode has no store; service uses HTTP client.
+
+### DTOs
+- Reuse `rest.EventDTO` and a new `ConflictDTO` (move to `internal/ui/dto.go` or `internal/emitter/rest`).
+
 ## Tasks
-1. Scaffold Wails app (`wails init -n focacal -t svelte`).
+1. Scaffold Wails app (`wails init -n focacal -t react`).
 2. Add Go bindings: `GetEvents`, `GetConflicts`, `DismissConflict`, `GetSources`, `GetDestinations`, `PutSources`, `PutDestinations`, `GetConfig`, `UpdateConfig`.
 3. Build calendar view component using event.color, conflict markers, side-by-side overlaps.
 4. Conflicts panel with dismiss.
