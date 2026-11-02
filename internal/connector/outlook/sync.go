@@ -19,13 +19,18 @@ func (c *Connector) Sync(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	return c.syncCalendar(ctx, client, "")
+	for _, calID := range c.cfg.EffectiveCalendarIDs() {
+		if err := c.syncCalendar(ctx, client, calID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (c *Connector) syncCalendar(ctx context.Context, client *http.Client, calendarID string) error {
 	// Outlook uses delta queries for incremental sync.
 	// On first run we use the full event list; subsequent runs use the delta link.
-	syncToken, _, _, err := c.db.GetSyncState(ctx, c.cfg.ID)
+	syncToken, _, _, err := c.db.GetSyncState(ctx, syncKey(c.cfg.ID, calendarID))
 	if err != nil {
 		return err
 	}
@@ -39,7 +44,7 @@ func (c *Connector) syncCalendar(ctx context.Context, client *http.Client, calen
 		end := now.AddDate(0, 0, 14).Format(time.RFC3339)
 
 		calPath := "/me/calendar/calendarView"
-		if calendarID != "" {
+		if calendarID != "" && calendarID != "primary" {
 			calPath = fmt.Sprintf("/me/calendars/%s/calendarView", calendarID)
 		}
 		apiURL = fmt.Sprintf("%s%s/delta?startDateTime=%s&endDateTime=%s&$top=100",
@@ -76,13 +81,13 @@ func (c *Connector) syncCalendar(ctx context.Context, client *http.Client, calen
 		}
 
 		for _, item := range result.Value {
-			if err := c.upsertEvent(ctx, item); err != nil {
+			if err := c.upsertEvent(ctx, calendarID, item); err != nil {
 				return fmt.Errorf("upsert event %q: %w", item.ID, err)
 			}
 		}
 
 		if result.DeltaLink != "" {
-			if err := c.db.SetSyncState(ctx, c.cfg.ID, result.DeltaLink, "", time.Time{}); err != nil {
+			if err := c.db.SetSyncState(ctx, syncKey(c.cfg.ID, calendarID), result.DeltaLink, "", time.Time{}); err != nil {
 				return err
 			}
 		}
@@ -92,27 +97,37 @@ func (c *Connector) syncCalendar(ctx context.Context, client *http.Client, calen
 	return nil
 }
 
-func (c *Connector) upsertEvent(ctx context.Context, item outlookEvent) error {
+func (c *Connector) upsertEvent(ctx context.Context, calendarID string, item outlookEvent) error {
+	cal := calendarID
+	if cal == "" || cal == "primary" {
+		cal = "primary"
+	}
 	if item.IsRemoved() {
-		return c.db.DeleteEvent(ctx, c.cfg.ID+":"+item.ID)
+		return c.db.DeleteEvent(ctx, store.EventID(c.cfg.ID, cal, item.ID))
 	}
 
+	e := toStoreEvent(c.cfg.ID, cal, item)
+	return c.db.UpsertEvent(ctx, e)
+}
+
+// toStoreEvent maps an Outlook event to a store.Event.
+func toStoreEvent(sourceID, calendarID string, item outlookEvent) *store.Event {
 	e := &store.Event{
-		ID:            c.cfg.ID + ":" + item.ID,
-		SourceID:      c.cfg.ID,
-		UID:           item.ID,
-		Title:         item.Subject,
-		Description:   item.BodyPreview,
-		Location:      item.Location.DisplayName,
-		ConferenceURL: item.OnlineMeetingURL,
+		ID:             store.EventID(sourceID, calendarID, item.ID),
+		SourceID:       sourceID,
+		CalendarID:     calendarID,
+		UID:            item.ID,
+		ICalUID:        item.ICalUID,
+		Title:          item.Subject,
+		Description:    item.BodyPreview,
+		Location:       item.Location.DisplayName,
+		ConferenceURL:  item.OnlineMeetingURL,
+		ResponseStatus: outlookResponseStatus(item),
+		ShowAs:         outlookShowAs(item.ShowAs),
 	}
-
-	switch item.ShowAs {
-	case "tentative":
-		e.Status = "tentative"
-	case "cancelled":
+	if item.IsCancelled {
 		e.Status = "cancelled"
-	default:
+	} else {
 		e.Status = "confirmed"
 	}
 
@@ -124,8 +139,35 @@ func (c *Connector) upsertEvent(ctx context.Context, item outlookEvent) error {
 		e.Start, _ = time.Parse("2006-01-02T15:04:05.9999999", item.Start.DateTime)
 		e.End, _ = time.Parse("2006-01-02T15:04:05.9999999", item.End.DateTime)
 	}
+	return e
+}
 
-	return c.db.UpsertEvent(ctx, e)
+func outlookResponseStatus(item outlookEvent) string {
+	switch item.ResponseStatus.Response {
+	case "tentativelyAccepted":
+		return "tentative"
+	case "declined":
+		return "declined"
+	case "accepted", "organizer":
+		return "accepted"
+	case "none", "notResponded":
+		return "needs_action"
+	}
+	if item.ResponseStatus.Response == "" {
+		return "accepted"
+	}
+	return "needs_action"
+}
+
+func outlookShowAs(s string) string {
+	switch s {
+	case "free":
+		return "free"
+	case "oof":
+		return "oof"
+	default:
+		return "busy"
+	}
 }
 
 // RegisterWebhook registers or renews a Graph change notification subscription.
@@ -381,12 +423,17 @@ func (c *Connector) DeleteEvent(ctx context.Context, remoteID string) error {
 // outlookEvent represents a Microsoft Graph calendar event.
 type outlookEvent struct {
 	ID               string `json:"id"`
+	ICalUID          string `json:"iCalUId"`
 	Subject          string `json:"subject"`
 	BodyPreview      string `json:"bodyPreview"`
 	IsAllDay         bool   `json:"isAllDay"`
 	IsCancelled      bool   `json:"isCancelled"`
 	ShowAs           string `json:"showAs"` // free | tentative | busy | oof | workingElsewhere | unknown
 	OnlineMeetingURL string `json:"onlineMeetingUrl"`
+	ResponseStatus   struct {
+		Response string `json:"response"`
+	} `json:"responseStatus"`
+	Removed          json.RawMessage `json:"@removed"`
 	Start            struct {
 		DateTime string `json:"dateTime"`
 		TimeZone string `json:"timeZone"`
@@ -398,13 +445,17 @@ type outlookEvent struct {
 	Location struct {
 		DisplayName string `json:"displayName"`
 	} `json:"location"`
-	AdditionalData map[string]any `json:"additionalData,omitempty"`
 }
 
 // IsRemoved reports whether this is a delta-removed event.
 func (e outlookEvent) IsRemoved() bool {
-	if removed, ok := e.AdditionalData["@removed"]; ok && removed != nil {
-		return true
+	return len(e.Removed) > 0
+}
+
+// syncKey returns the sync-state key for a source/calendar pair.
+func syncKey(sourceID, calendarID string) string {
+	if calendarID == "" {
+		calendarID = "primary"
 	}
-	return e.IsCancelled
+	return sourceID + ":" + calendarID
 }
