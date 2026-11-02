@@ -1,7 +1,11 @@
-# Wails Desktop UI Plan (replaces Task 12 embedded web UI)
+# Dual UI Plan: Web + Wails Desktop (replaces Task 12 embedded web UI)
 
 ## Goal
-Replace the embedded `rest/ui.html` web UI with a Wails v2 desktop app that shares a single Svelte (or React) frontend, consumable both as a desktop binary and (optionally) as a served web build.
+Replace the embedded `rest/ui.html` with a shared frontend (Svelte or React + component library) used by BOTH:
+- A web build served by the REST server (static assets), and
+- A Wails v2 desktop binary.
+
+One codebase, two shells. Web build talks to REST API; desktop build uses Wails Go bindings (no HTTP hop) but can fall back to REST.
 
 ## Why
 - Go backend already exposes a REST API + CalDAV + MCP; a Wails app can reuse it.
