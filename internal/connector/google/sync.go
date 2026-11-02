@@ -109,18 +109,32 @@ func (c *Connector) syncCalendar(ctx context.Context, client *http.Client, calen
 
 func (c *Connector) upsertEvent(ctx context.Context, calendarID string, item googleEvent) error {
 	if item.Status == "cancelled" {
-		return c.db.DeleteEvent(ctx, c.cfg.ID+":"+item.ID)
+		return c.db.DeleteEvent(ctx, store.EventID(c.cfg.ID, calendarID, item.ID))
 	}
 
+	e := toStoreEvent(c.cfg.ID, calendarID, item)
+	return c.db.UpsertEvent(ctx, e)
+}
+
+// toStoreEvent maps a Google Calendar event to a store.Event.
+func toStoreEvent(sourceID, calendarID string, item googleEvent) *store.Event {
 	e := &store.Event{
-		ID:           c.cfg.ID + ":" + item.ID,
-		SourceID:     c.cfg.ID,
-		UID:          item.ID,
-		Title:        item.Summary,
-		Description:  item.Description,
-		Location:     item.Location,
-		Status:       item.Status,
-		ConferenceURL: extractConferenceURL(item),
+		ID:             store.EventID(sourceID, calendarID, item.ID),
+		SourceID:       sourceID,
+		CalendarID:     calendarID,
+		UID:            item.ID,
+		ICalUID:        item.ICalUID,
+		Title:          item.Summary,
+		Description:    item.Description,
+		Location:       item.Location,
+		Status:         item.Status,
+		ResponseStatus: googleResponseStatus(item),
+		ConferenceURL:  extractConferenceURL(item),
+	}
+	if item.Transparency == "transparent" {
+		e.ShowAs = "free"
+	} else {
+		e.ShowAs = "busy"
 	}
 
 	// Parse start/end — can be date-time or all-day date.
@@ -133,17 +147,45 @@ func (c *Connector) upsertEvent(ctx context.Context, calendarID string, item goo
 		e.End, _ = time.Parse("2006-01-02", item.End.Date)
 	}
 
-	return c.db.UpsertEvent(ctx, e)
+	return e
+}
+
+func googleResponseStatus(item googleEvent) string {
+	for _, a := range item.Attendees {
+		if a.Self {
+			switch a.ResponseStatus {
+			case "declined":
+				return "declined"
+			case "tentative":
+				return "tentative"
+			case "needsAction":
+				return "needs_action"
+			case "accepted":
+				return "accepted"
+			}
+		}
+	}
+	if len(item.Attendees) == 0 {
+		return "accepted"
+	}
+	// no self attendee: organizer? default accepted
+	return "accepted"
 }
 
 // googleEvent matches the Google Calendar API event resource.
 type googleEvent struct {
-	ID          string `json:"id"`
-	Summary     string `json:"summary"`
-	Description string `json:"description"`
-	Location    string `json:"location"`
-	Status      string `json:"status"`
-	Start       struct {
+	ID           string `json:"id"`
+	ICalUID      string `json:"iCalUID"`
+	Summary      string `json:"summary"`
+	Description  string `json:"description"`
+	Location     string `json:"location"`
+	Status       string `json:"status"`
+	Transparency string `json:"transparency"`
+	Attendees    []struct {
+		Self           bool   `json:"self"`
+		ResponseStatus string `json:"responseStatus"`
+	} `json:"attendees"`
+	Start struct {
 		DateTime string `json:"dateTime"`
 		Date     string `json:"date"`
 	} `json:"start"`

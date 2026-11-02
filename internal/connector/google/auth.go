@@ -183,10 +183,7 @@ func loadCredentialsFile(path string) (*credentialsFile, error) {
 // calendarIDs returns the list of calendar IDs to sync.
 // Falls back to "primary" if none configured.
 func (c *Connector) calendarIDs() []string {
-	if len(c.cfg.CalendarIDs) > 0 {
-		return c.cfg.CalendarIDs
-	}
-	return []string{"primary"}
+	return c.cfg.EffectiveCalendarIDs()
 }
 
 // baseURL for the Google Calendar API.
