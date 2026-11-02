@@ -468,17 +468,25 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 // EventDTO is the unified event shape returned by the REST API.
 type EventDTO struct {
-	ID            string    `json:"id"`
-	Type          string    `json:"type"`   // "real" | "focus" | "lunch" | "break"
-	Source        string    `json:"source"` // source_id or "focacal"
-	Title         string    `json:"title"`
-	Start         time.Time `json:"start"`
-	End           time.Time `json:"end"`
-	AllDay        bool      `json:"all_day,omitempty"`
-	ConferenceURL string    `json:"conference_url,omitempty"`
-	Locked        bool      `json:"locked,omitempty"`
-	IsNow         bool      `json:"is_now"`
-	MinutesUntil  int       `json:"minutes_until"` // negative = already started
+	ID             string    `json:"id"`
+	Type           string    `json:"type"`   // "real" | "focus" | "lunch" | "break"
+	Source         string    `json:"source"` // source_id or "focacal"
+	Title          string    `json:"title"`
+	Start          time.Time `json:"start"`
+	End            time.Time `json:"end"`
+	AllDay         bool      `json:"all_day,omitempty"`
+	ConferenceURL  string    `json:"conference_url,omitempty"`
+	Locked         bool      `json:"locked,omitempty"`
+	IsNow          bool      `json:"is_now"`
+	MinutesUntil   int       `json:"minutes_until"` // negative = already started
+	Kind           string    `json:"kind,omitempty"`
+	Color          string    `json:"color,omitempty"`
+	CalendarID     string    `json:"calendar_id,omitempty"`
+	ResponseStatus string    `json:"response_status,omitempty"`
+	ShowAs         string    `json:"show_as,omitempty"`
+	LinkedIDs      []string  `json:"linked_ids,omitempty"`
+	HeuristicLink  bool      `json:"heuristic_link,omitempty"`
+	ConflictKeys   []string  `json:"conflict_keys,omitempty"`
 }
 
 // handleToday returns all events and blocks for today, sorted by start time.
