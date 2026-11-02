@@ -541,7 +541,7 @@ func (s *Server) handleToday(w http.ResponseWriter, r *http.Request) {
 
 	dtos := make([]EventDTO, 0, len(events)+len(blocks))
 	for _, e := range events {
-		dtos = append(dtos, eventToDTO(e, now))
+		dtos = append(dtos, EventToDTO(e, now))
 	}
 	for _, b := range blocks {
 		dtos = append(dtos, blockToDTO(b, now))
@@ -565,7 +565,7 @@ func (s *Server) handleNow(w http.ResponseWriter, r *http.Request) {
 
 	dtos := make([]EventDTO, 0, len(events)+len(blocks))
 	for _, e := range events {
-		dtos = append(dtos, eventToDTO(e, now))
+		dtos = append(dtos, EventToDTO(e, now))
 	}
 	for _, b := range blocks {
 		dtos = append(dtos, blockToDTO(b, now))
@@ -625,14 +625,14 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 	dtos := make([]EventDTO, 0, len(events))
 	for _, e := range events {
-		dtos = append(dtos, eventToDTO(e, now))
+		dtos = append(dtos, EventToDTO(e, now))
 	}
 	writeJSON(w, http.StatusOK, dtos)
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-func eventToDTO(e *store.Event, now time.Time) EventDTO {
+func EventToDTO(e *store.Event, now time.Time) EventDTO {
 	return EventDTO{
 		ID:            e.ID,
 		Type:          "real",
@@ -674,8 +674,8 @@ func (s *Server) handleConflicts(w http.ResponseWriter, r *http.Request) {
 			"key":       c.Key,
 			"tentative": c.Tentative,
 			"dismissed": c.Dismissed,
-			"a":         eventToDTO(c.A.Canonical, time.Now()),
-			"b":         eventToDTO(c.B.Canonical, time.Now()),
+			"a":         EventToDTO(c.A.Canonical, time.Now()),
+			"b":         EventToDTO(c.B.Canonical, time.Now()),
 		})
 	}
 	writeJSON(w, http.StatusOK, out)
