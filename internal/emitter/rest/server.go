@@ -18,6 +18,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/spf13/viper"
 	"github.com/Kenttleton/focacal/internal/bus"
+	"github.com/Kenttleton/focacal/internal/conflict"
 	"github.com/Kenttleton/focacal/internal/config"
 	"github.com/Kenttleton/focacal/internal/connector"
 	caldavemitter "github.com/Kenttleton/focacal/internal/emitter/caldav"
@@ -78,7 +79,12 @@ func New(connectors map[string]connector.Connector, health *HealthState, addr st
 	r.Post("/replan", s.handleReplan)
 	r.Get("/blocks", s.handleBlocks)
 	r.Get("/events", s.handleEvents)
-
+	r.Get("/conflicts", s.handleConflicts)
+	r.Post("/conflicts/{key}/dismiss", s.handleDismissConflict)
+	r.Get("/sources", s.handleSources)
+	r.Get("/destinations", s.handleDestinations)
+	r.Put("/config/sources", s.handlePutSources)
+	r.Put("/config/destinations", s.handlePutDestinations)
 	// Block mutations from the Web UI.
 	r.Post("/blocks", s.handleCreateBlock)
 	r.Patch("/blocks/{id}", s.handleUpdateBlock)
@@ -351,12 +357,37 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := viper.WriteConfig(); err != nil {
+	cfgPath := viper.ConfigFileUsed()
+	if cfgPath == "" {
+		writeError(w, http.StatusInternalServerError, "no config file in use")
+		return
+	}
+	// Build a partial config map for WriteSections (only top-level sections owned).
+	sections := map[string]any{
+		"working_hours": map[string]any{
+			"start":    uc.WorkingHours.Start,
+			"end":      uc.WorkingHours.End,
+			"timezone": uc.WorkingHours.Timezone,
+		},
+		"lunch": map[string]any{
+			"preferred":        uc.Lunch.Preferred,
+			"window_start":     uc.Lunch.WindowStart,
+			"window_end":       uc.Lunch.WindowEnd,
+			"duration_minutes": uc.Lunch.DurationMinutes,
+		},
+		"focus": map[string]any{
+			"style":                  uc.Focus.Style,
+			"min_block_minutes":      uc.Focus.MinBlockMinutes,
+			"max_block_minutes":      uc.Focus.MaxBlockMinutes,
+			"buffer_around_meetings": uc.Focus.BufferAroundMeetings,
+		},
+	}
+	if err := config.WriteSections(cfgPath, sections); err != nil {
 		s.log.Warn("write config", "err", err)
 		writeError(w, http.StatusInternalServerError, "could not write config.yaml: "+err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "saved"})
+	writeJSON(w, http.StatusOK, map[string]any{"status": "saved", "restart_required": true})
 }
 
 // handleWebhookValidation responds to the Outlook/Graph subscription validation
@@ -630,6 +661,150 @@ func blockToDTO(b *store.Block, now time.Time) EventDTO {
 	}
 }
 
+func (s *Server) handleConflicts(w http.ResponseWriter, r *http.Request) {
+	from, to := parseRange(r)
+	confs, err := conflict.Fetch(r.Context(), from, to)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	out := make([]map[string]any, 0, len(confs))
+	for _, c := range confs {
+		out = append(out, map[string]any{
+			"key":       c.Key,
+			"tentative": c.Tentative,
+			"dismissed": c.Dismissed,
+			"a":         eventToDTO(c.A.Canonical, time.Now()),
+			"b":         eventToDTO(c.B.Canonical, time.Now()),
+		})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleDismissConflict(w http.ResponseWriter, r *http.Request) {
+	key := chi.URLParam(r, "key")
+	if err := store.FromContext(r.Context()).DismissConflict(r.Context(), key); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleSources(w http.ResponseWriter, r *http.Request) {
+	uc := config.UserConfigFromContext(r.Context())
+	out := make([]map[string]any, 0, len(uc.Sources))
+	for _, src := range uc.Sources {
+		out = append(out, map[string]any{
+			"id":           src.ID,
+			"label":        src.Label,
+			"type":         src.Type,
+			"calendar_ids": src.EffectiveCalendarIDs(),
+			"conflicts": map[string]bool{
+				"declined":  src.Conflicts.CountsDeclined(),
+				"tentative": src.Conflicts.CountsTentative(),
+				"free":      src.Conflicts.CountsFree(),
+				"all_day":   src.Conflicts.CountsAllDay(),
+			},
+			"ics_url_env": src.ICSURLEnv,
+			"has_secret":  src.Password != "" || src.ICSURL != "",
+		})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleDestinations(w http.ResponseWriter, r *http.Request) {
+	uc := config.UserConfigFromContext(r.Context())
+	writeJSON(w, http.StatusOK, uc.Destinations)
+}
+
+func (s *Server) handlePutSources(w http.ResponseWriter, r *http.Request) {
+	var list []config.SourceConfig
+	if err := json.NewDecoder(r.Body).Decode(&list); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	uc := config.UserConfigFromContext(r.Context())
+	// sentinel handling
+	for i := range list {
+		if list[i].Password == "********" {
+			// find existing
+			for _, old := range uc.Sources {
+				if old.ID == list[i].ID {
+					list[i].Password = old.Password
+					list[i].ICSURL = old.ICSURL
+				}
+			}
+		}
+		if list[i].ICSURL == "********" {
+			for _, old := range uc.Sources {
+				if old.ID == list[i].ID {
+					list[i].ICSURL = old.ICSURL
+				}
+			}
+		}
+	}
+	candidate := *uc
+	candidate.Sources = list
+	cfg := &config.Config{UserConfig: candidate}
+	if err := cfg.Validate(); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	path := viper.ConfigFileUsed()
+	if path == "" {
+		writeError(w, http.StatusInternalServerError, "no config file in use")
+		return
+	}
+	if err := config.WriteSections(path, map[string]any{"sources": list}); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "saved", "restart_required": true})
+}
+
+func (s *Server) handlePutDestinations(w http.ResponseWriter, r *http.Request) {
+	var list []config.DestinationConfig
+	if err := json.NewDecoder(r.Body).Decode(&list); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	uc := config.UserConfigFromContext(r.Context())
+	candidate := *uc
+	candidate.Destinations = list
+	cfg := &config.Config{UserConfig: candidate}
+	if err := cfg.Validate(); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	path := viper.ConfigFileUsed()
+	if path == "" {
+		writeError(w, http.StatusInternalServerError, "no config file in use")
+		return
+	}
+	if err := config.WriteSections(path, map[string]any{"destinations": list}); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "saved", "restart_required": true})
+}
+
+func parseRange(r *http.Request) (time.Time, time.Time) {
+	now := time.Now()
+	from := now.AddDate(0, 0, -7)
+	to := now.AddDate(0, 0, 14)
+	if v := r.URL.Query().Get("from"); v != "" {
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			from = t
+		}
+	}
+	if v := r.URL.Query().Get("to"); v != "" {
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			to = t
+		}
+	}
+	return from, to
+}
+
 func sortDTOs(dtos []EventDTO) {
 	for i := 1; i < len(dtos); i++ {
 		for j := i; j > 0 && dtos[j].Start.Before(dtos[j-1].Start); j-- {
@@ -651,7 +826,7 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
