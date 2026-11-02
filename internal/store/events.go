@@ -9,38 +9,58 @@ import (
 
 // Event is a unified calendar event from any source.
 type Event struct {
-	ID            string
-	SourceID      string
-	UID           string
-	Title         string
-	Description   string
-	Location      string
-	Start         time.Time
-	End           time.Time
-	AllDay        bool
-	Status        string // confirmed | tentative | cancelled
-	ConferenceURL string
-	RawICal       string
-	SyncedAt      time.Time
+	ID             string
+	SourceID       string
+	CalendarID     string
+	UID            string
+	ICalUID        string
+	Title          string
+	Description    string
+	Location       string
+	Start          time.Time
+	End            time.Time
+	AllDay         bool
+	Status         string // confirmed | tentative | cancelled
+	ResponseStatus string // accepted | tentative | declined | needs_action
+	ShowAs         string // busy | free | oof (empty treated as busy)
+	ConferenceURL  string
+	RawICal        string
+	SyncedAt       time.Time
 }
+
+// EventID builds the composite id for an event row.
+func EventID(sourceID, calendarID, uid string) string {
+	return sourceID + ":" + calendarID + ":" + uid
+}
+
+// IsTentative reports whether the event is tentative.
+func (e *Event) IsTentative() bool {
+	return e.Status == "tentative" || e.ResponseStatus == "tentative"
+}
+
+// eventColumns is the shared column list for events (keep in sync with scanEvents).
+const eventColumns = `id, source_id, calendar_id, uid, ical_uid, title, description, location,
+	start_time, end_time, all_day, status, response_status, show_as, conference_url, raw_ical, synced_at`
 
 // UpsertEvent inserts or replaces an event by its composite ID.
 func (db *DB) UpsertEvent(ctx context.Context, e *Event) error {
 	const q = `
 INSERT INTO events
-	(id, source_id, uid, title, description, location,
-	 start_time, end_time, all_day, status, conference_url, raw_ical, synced_at)
-VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+	(id, source_id, calendar_id, uid, ical_uid, title, description, location,
+	 start_time, end_time, all_day, status, response_status, show_as, conference_url, raw_ical, synced_at)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(id) DO UPDATE SET
+	calendar_id=excluded.calendar_id, uid=excluded.uid, ical_uid=excluded.ical_uid,
 	title=excluded.title, description=excluded.description,
 	location=excluded.location, start_time=excluded.start_time,
 	end_time=excluded.end_time, all_day=excluded.all_day,
-	status=excluded.status, conference_url=excluded.conference_url,
+	status=excluded.status, response_status=excluded.response_status,
+	show_as=excluded.show_as, conference_url=excluded.conference_url,
 	raw_ical=excluded.raw_ical, synced_at=excluded.synced_at`
 
 	_, err := db.ExecContext(ctx, q,
-		e.ID, e.SourceID, e.UID, e.Title, e.Description, e.Location,
-		e.Start.UTC(), e.End.UTC(), e.AllDay, e.Status, e.ConferenceURL,
+		e.ID, e.SourceID, e.CalendarID, e.UID, e.ICalUID, e.Title, e.Description, e.Location,
+		e.Start.UTC(), e.End.UTC(), e.AllDay, e.Status, e.ResponseStatus, e.ShowAs, e.ConferenceURL,
 		e.RawICal, time.Now().UTC(),
 	)
 	return err
@@ -54,9 +74,7 @@ func (db *DB) DeleteEvent(ctx context.Context, id string) error {
 
 // ListEvents returns all events whose start_time falls within [from, to).
 func (db *DB) ListEvents(ctx context.Context, from, to time.Time) ([]*Event, error) {
-	const q = `
-SELECT id, source_id, uid, title, description, location,
-       start_time, end_time, all_day, status, conference_url, raw_ical, synced_at
+	q := `SELECT ` + eventColumns + `
 FROM events
 WHERE start_time >= ? AND start_time < ?
   AND status != 'cancelled'
@@ -70,16 +88,19 @@ ORDER BY start_time`
 	return scanEvents(rows)
 }
 
-// ListEventsBySource returns events for a specific source in the given range.
-func (db *DB) ListEventsBySource(ctx context.Context, sourceID string, from, to time.Time) ([]*Event, error) {
-	const q = `
-SELECT id, source_id, uid, title, description, location,
-       start_time, end_time, all_day, status, conference_url, raw_ical, synced_at
+// ListEventsByCalendar returns events for a specific source/calendar in the given range.
+func (db *DB) ListEventsByCalendar(ctx context.Context, sourceID, calendarID string, from, to time.Time) ([]*Event, error) {
+	q := `SELECT ` + eventColumns + `
 FROM events
-WHERE source_id = ? AND start_time >= ? AND start_time < ?
-ORDER BY start_time`
+WHERE source_id = ? AND start_time >= ? AND start_time < ?`
+	args := []interface{}{sourceID, from.UTC(), to.UTC()}
+	if calendarID != "" {
+		q += ` AND calendar_id = ?`
+		args = append(args, calendarID)
+	}
+	q += ` ORDER BY start_time`
 
-	rows, err := db.QueryContext(ctx, q, sourceID, from.UTC(), to.UTC())
+	rows, err := db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -87,7 +108,32 @@ ORDER BY start_time`
 	return scanEvents(rows)
 }
 
-// GetSyncState returns the sync token and webhook info for a source.
+// DismissConflict records that a conflict key has been seen.
+func (db *DB) DismissConflict(ctx context.Context, key string) error {
+	_, err := db.ExecContext(ctx, `
+INSERT INTO conflict_dismissals (key) VALUES (?)
+ON CONFLICT(key) DO NOTHING`, key)
+	return err
+}
+
+// ListDismissedConflicts returns the dismissed conflict keys with their timestamps.
+func (db *DB) ListDismissedConflicts(ctx context.Context) (map[string]time.Time, error) {
+	rows, err := db.QueryContext(ctx, `SELECT key, dismissed_at FROM conflict_dismissals`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[string]time.Time)
+	for rows.Next() {
+		var k string
+		var ts time.Time
+		if err := rows.Scan(&k, &ts); err != nil {
+			return nil, err
+		}
+		out[k] = ts
+	}
+	return out, rows.Err()
+}
 func (db *DB) GetSyncState(ctx context.Context, sourceID string) (token, webhookID string, webhookExpiry time.Time, err error) {
 	const q = `SELECT sync_token, webhook_id, webhook_expiry FROM sync_state WHERE source_id = ?`
 	var expiry sql.NullTime
@@ -187,8 +233,8 @@ func scanEvents(rows *sql.Rows) ([]*Event, error) {
 	for rows.Next() {
 		var e Event
 		if err := rows.Scan(
-			&e.ID, &e.SourceID, &e.UID, &e.Title, &e.Description, &e.Location,
-			&e.Start, &e.End, &e.AllDay, &e.Status, &e.ConferenceURL,
+			&e.ID, &e.SourceID, &e.CalendarID, &e.UID, &e.ICalUID, &e.Title, &e.Description, &e.Location,
+			&e.Start, &e.End, &e.AllDay, &e.Status, &e.ResponseStatus, &e.ShowAs, &e.ConferenceURL,
 			&e.RawICal, &e.SyncedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan event: %w", err)

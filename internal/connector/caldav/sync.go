@@ -187,7 +187,7 @@ func (c *Connector) upsertEvent(ctx context.Context, path string, event ical.Eve
 func (c *Connector) pruneDeleted(ctx context.Context, calPath string, seen map[string]bool) error {
 	// List all events for this source.
 	now := time.Now()
-	events, err := c.db.ListEventsBySource(ctx, c.cfg.ID, now.AddDate(0, 0, -7), now.AddDate(0, 0, 14))
+	events, err := c.db.ListEventsByCalendar(ctx, c.cfg.ID, "", now.AddDate(0, 0, -7), now.AddDate(0, 0, 14))
 	if err != nil {
 		return err
 	}

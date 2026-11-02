@@ -17,8 +17,9 @@ type Store interface {
 	UpsertEvent(ctx context.Context, e *Event) error
 	DeleteEvent(ctx context.Context, id string) error
 	ListEvents(ctx context.Context, from, to time.Time) ([]*Event, error)
-	ListEventsBySource(ctx context.Context, sourceID string, from, to time.Time) ([]*Event, error)
-	DeduplicateByUID(ctx context.Context) (int, error)
+	ListEventsByCalendar(ctx context.Context, sourceID, calendarID string, from, to time.Time) ([]*Event, error)
+	DismissConflict(ctx context.Context, key string) error
+	ListDismissedConflicts(ctx context.Context) (map[string]time.Time, error)
 
 	// Blocks
 

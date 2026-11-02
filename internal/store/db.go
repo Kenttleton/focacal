@@ -32,19 +32,23 @@ func Open(path string) (*DB, error) {
 
 const schema = `
 CREATE TABLE IF NOT EXISTS events (
-	id           TEXT PRIMARY KEY,        -- "{source_id}:{uid}"
-	source_id    TEXT NOT NULL,
-	uid          TEXT NOT NULL,
-	title        TEXT NOT NULL DEFAULT '',
-	description  TEXT NOT NULL DEFAULT '',
-	location     TEXT NOT NULL DEFAULT '',
-	start_time   DATETIME NOT NULL,
-	end_time     DATETIME NOT NULL,
-	all_day      BOOLEAN NOT NULL DEFAULT 0,
-	status       TEXT NOT NULL DEFAULT 'confirmed', -- confirmed | tentative | cancelled
-	conference_url TEXT NOT NULL DEFAULT '',
-	raw_ical     TEXT NOT NULL DEFAULT '',
-	synced_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+	id             TEXT PRIMARY KEY,        -- "{source_id}:{calendar_id}:{uid}"
+	source_id      TEXT NOT NULL,
+	calendar_id    TEXT NOT NULL DEFAULT '',
+	uid            TEXT NOT NULL,
+	ical_uid       TEXT NOT NULL DEFAULT '',
+	title          TEXT NOT NULL DEFAULT '',
+	description    TEXT NOT NULL DEFAULT '',
+	location       TEXT NOT NULL DEFAULT '',
+	start_time     DATETIME NOT NULL,
+	end_time       DATETIME NOT NULL,
+	all_day        BOOLEAN NOT NULL DEFAULT 0,
+	status         TEXT NOT NULL DEFAULT 'confirmed', -- confirmed | tentative | cancelled
+	response_status TEXT NOT NULL DEFAULT 'accepted', -- accepted | tentative | declined | needs_action
+	show_as        TEXT NOT NULL DEFAULT 'busy',      -- busy | free | oof
+	conference_url  TEXT NOT NULL DEFAULT '',
+	raw_ical       TEXT NOT NULL DEFAULT '',
+	synced_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_events_start ON events(start_time);
@@ -78,6 +82,11 @@ CREATE TABLE IF NOT EXISTS oauth_tokens (
 	token_json   TEXT NOT NULL,            -- JSON-encoded oauth2.Token
 	updated_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS conflict_dismissals (
+	key          TEXT PRIMARY KEY,
+	dismissed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 `
 
 // WALCheckpoint runs PRAGMA wal_checkpoint(TRUNCATE) to reclaim WAL file space.
@@ -88,6 +97,41 @@ func (db *DB) WALCheckpoint(ctx context.Context) error {
 }
 
 func migrate(db *sql.DB) error {
+	// Detect an events table from the old schema (no calendar_id column) and
+	// rebuild it, clearing sync tokens so the next sync is a full sync.
+	var hasCalendarID bool
+	rows, err := db.Query(`PRAGMA table_info(events)`)
+	if err == nil {
+		for rows.Next() {
+			var cid int
+			var name, ctype string
+			var notnull int
+			var dflt interface{}
+			var pk int
+			if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+				continue
+			}
+			if name == "calendar_id" {
+				hasCalendarID = true
+			}
+		}
+		rows.Close()
+	}
+	// If the table exists but lacks calendar_id, drop it.
+	if !hasCalendarID {
+		// only drop if table exists
+		var name string
+		err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name='events'`).Scan(&name)
+		if err == nil {
+			if _, err := db.Exec(`DROP TABLE events`); err != nil {
+				return fmt.Errorf("drop old events: %w", err)
+			}
+			if _, err := db.Exec(`UPDATE sync_state SET sync_token = ''`); err != nil {
+				return fmt.Errorf("clear sync tokens: %w", err)
+			}
+		}
+	}
+
 	if _, err := db.Exec(schema); err != nil {
 		return err
 	}

@@ -234,12 +234,6 @@ func syncAll(ctx context.Context, log *slog.Logger, connectors map[string]connec
 	}
 
 	if changed {
-		if n, err := db.DeduplicateByUID(ctx); err != nil {
-			log.Warn("dedup failed", "err", err)
-		} else if n > 0 {
-			log.Info("deduped cross-source events", "removed", n)
-		}
-
 		b.Publish(bus.Message{
 			Type:      bus.EventCalendarChanged,
 			RequestID: newRequestID(),
