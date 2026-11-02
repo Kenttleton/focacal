@@ -28,10 +28,16 @@ One codebase, two shells. Web build talks to REST API; desktop build uses Wails 
 7. Build pipeline: `wails build` for macOS/Windows/Linux; CI artifacts.
 8. Docs: README update, compose unchanged (REST still serves web).
 
-## Open decisions
-- Frontend framework: Svelte (smaller) vs React (larger ecosystem/component libs).
-- Component library: shadcn/ui (React) vs DaisyUI (Tailwind, framework-agnostic).
-- Whether desktop replaces web UI entirely or coexists.
+## Decisions
+- Frontend framework: **React** (ecosystem, component libraries).
+- Component library: **Mantine** (batteries-included date/calendar components: DatePicker, Calendar, TimeInput) plus **FullCalendar** (or react-big-calendar) for the week view; Tailwind optional.
+- Web and desktop coexist; same frontend, two shells.
+
+## Desktop-specific: remote backend support
+- Desktop app settings: configurable backend URL (default http://localhost:5233) + API key.
+- When backend URL is set and reachable, desktop uses REST API (like web build) instead of in-process bindings.
+- Allows a desktop client to point at a remote focacal deployment.
+- Store config in Wails app config; allow switching between "local embedded" and "remote" mode.
 
 ## Non-goals (for now)
 - Mobile.
