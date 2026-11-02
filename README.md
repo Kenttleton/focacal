@@ -1,8 +1,8 @@
 # focacal
 
-AI-powered calendar focus scheduler. Aggregates Google Calendar and Outlook,
-uses a local Ollama model to plan focus blocks and lunch, and serves everything
-as a CalDAV feed and REST API.
+AI-powered calendar scheduling assistant. Aggregates Google Calendar, Outlook
+and CalDAV calendars, uses a local Ollama model to plan focus time and lunch
+around your meetings, and serves everything as a CalDAV feed, REST API and web UI.
 
 **fo-ca-cal** — focus · calendar · AI.
 
@@ -172,11 +172,20 @@ working_hours:
   timezone: "America/New_York"   # any IANA timezone name
 ```
 
-### Focus block style
+### Focus techniques
+
+Focus time comes in more than one shape. A flexible focus block (a target amount
+of time floated into your free gaps) is the common case. Focacal also plans
+around focus *techniques* such as pomodoro (time-boxed work and break cycles),
+which is where it goes beyond a plain focus-time scheduler. More techniques can
+be added without a new rule kind.
+
+A block at the same time on set days is not focus planning, it is a Routine, and
+`fixed` is moving there in the planner refactor.
 
 ```yaml
 focus:
-  style: "flexible"          # flexible | pomodoro | fixed
+  style: "flexible"          # flexible | pomodoro  (fixed is moving to Routine)
   min_block_minutes: 30      # ignore gaps shorter than this
   max_block_minutes: 120     # split longer gaps here
   buffer_around_meetings: 10 # minutes of breathing room around meetings
@@ -309,15 +318,18 @@ focacal/
 │   ├── connector/
 │   │   ├── connector.go        # Connector interface
 │   │   ├── google/             # Google Calendar OAuth + sync + write-back
-│   │   └── outlook/            # Outlook Graph API OAuth + sync
+│   │   ├── outlook/            # Outlook Graph API OAuth + sync
+│   │   └── caldav/             # generic CalDAV source (e.g. iCloud)
 │   ├── store/                  # SQLite: events, blocks, sync state, tokens
 │   ├── bus/                    # in-process pub/sub with debounce
 │   ├── mcp/                    # MCP server + tool implementations + Ollama agent
 │   └── emitter/
 │       ├── caldav/             # RFC 4791 CalDAV server (real + AI events merged)
-│       ├── rest/               # REST API for Raycast + external clients
+│       ├── rest/               # REST API + web UI (ui.html)
 │       └── writeback/          # writes blocks/busy back to source calendars
 ├── raycast-extension/          # TypeScript Raycast extension
+├── mac-menubar/                # macOS menu bar app
+├── windows-tray/               # Windows tray app
 ├── Dockerfile
 ├── docker-compose.yml
 ├── docker-compose.ollama.yml   # optional: Ollama in-stack
