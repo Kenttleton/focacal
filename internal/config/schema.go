@@ -28,7 +28,6 @@ type UserConfig struct {
 	Sources      []SourceConfig    `mapstructure:"sources"`
 	Destinations []DestinationConfig `mapstructure:"destinations"`
 	Colors       map[string]string `mapstructure:"colors"`
-	Writeback    WritebackConfig   `mapstructure:"writeback"`
 }
 
 // GlobalConfig holds deployment-level settings shared across all users.
@@ -92,8 +91,6 @@ type SourceConfig struct {
 	ID              string         `mapstructure:"id"`               // unique slug, e.g. "work-google"
 	Label           string         `mapstructure:"label"`            // free-text display name
 	Type            string         `mapstructure:"type"`             // google | outlook | caldav | ics
-	Writeback       bool           `mapstructure:"writeback"`        // legacy; removed in Task 2
-	CrossBusy       bool           `mapstructure:"cross_busy"`       // legacy; removed in Task 2
 	CredentialsFile string         `mapstructure:"credentials_file"` // path inside container
 	TokenFile       string         `mapstructure:"token_file"`       // path inside container (runtime)
 	CalendarIDs     []string       `mapstructure:"calendar_ids"`     // empty = all/primary
@@ -181,21 +178,6 @@ type EventVisibility struct {
 type FieldVisibility struct {
 	Visibility bool   `mapstructure:"visibility"`
 	Rename     string `mapstructure:"rename"`
-}
-
-// WritebackConfig controls how planned blocks appear on source calendars.
-type WritebackConfig struct {
-	CrossBusyTitle string         `mapstructure:"cross_busy_title"` // "Meeting"
-	Focus          BlockWriteback `mapstructure:"focus"`
-	Lunch          BlockWriteback `mapstructure:"lunch"`
-	Break          BlockWriteback `mapstructure:"break"`
-}
-
-type BlockWriteback struct {
-	Enabled     bool   `mapstructure:"enabled"`
-	Title       string `mapstructure:"title"`
-	ShowAs      string `mapstructure:"show_as"` // busy | free | tentative
-	Description string `mapstructure:"description"`
 }
 
 // EffectiveCalendarIDs returns the declared list, or the type default when empty.

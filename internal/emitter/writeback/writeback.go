@@ -2,22 +2,36 @@ package writeback
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"regexp"
 	"strings"
-	"time"
 
 	"github.com/Kenttleton/focacal/internal/config"
 	"github.com/Kenttleton/focacal/internal/connector"
 	"github.com/Kenttleton/focacal/internal/store"
 )
 
+// Config controls how planned blocks appear on source calendars.
+type Config struct {
+	CrossBusyTitle string     `mapstructure:"cross_busy_title"` // "Meeting"
+	Focus          BlockConfig `mapstructure:"focus"`
+	Lunch          BlockConfig `mapstructure:"lunch"`
+	Break          BlockConfig `mapstructure:"break"`
+}
+
+// BlockConfig describes how a single block type is written back.
+type BlockConfig struct {
+	Enabled     bool   `mapstructure:"enabled"`
+	Title       string `mapstructure:"title"`
+	ShowAs      string `mapstructure:"show_as"` // busy | free | tentative
+	Description string `mapstructure:"description"`
+}
+
 // Emitter writes AI-planned blocks and cross-calendar busy blocks back to
 // the user's real source calendars according to writeback config.
 type Emitter struct {
 	db         *store.DB
-	cfg        config.WritebackConfig
+	cfg        Config
 	connectors map[string]connector.Connector // keyed by source ID
 	sources    []config.SourceConfig
 	log        *slog.Logger
@@ -26,7 +40,7 @@ type Emitter struct {
 // New creates a write-back emitter.
 func New(
 	db *store.DB,
-	cfg config.WritebackConfig,
+	cfg Config,
 	connectors map[string]connector.Connector,
 	sources []config.SourceConfig,
 	log *slog.Logger,
@@ -44,41 +58,10 @@ func New(
 func (e *Emitter) Name() string { return "writeback" }
 
 // Notify syncs planned blocks and cross-busy events to all configured sources.
+// Notify is a documented no-op until the outputs piece (piece 3) lands.
+// Write-back to external calendars is intentionally disabled in the
+// read-only foundation; see the design record section 3.
 func (e *Emitter) Notify(ctx context.Context) error {
-	now := time.Now()
-	from := now.Truncate(24 * time.Hour)
-	to := from.AddDate(0, 0, 7)
-
-	blocks, err := e.db.ListBlocks(ctx, from, to)
-	if err != nil {
-		return fmt.Errorf("list blocks: %w", err)
-	}
-
-	events, err := e.db.ListEvents(ctx, from, to)
-	if err != nil {
-		return fmt.Errorf("list events: %w", err)
-	}
-
-	for _, src := range e.sources {
-		conn, ok := e.connectors[src.ID]
-		if !ok {
-			continue
-		}
-
-		// Write AI-planned blocks to this source calendar.
-		if src.Writeback {
-			if err := e.writeBlocks(ctx, conn, src, blocks); err != nil {
-				e.log.Error("write blocks", "source", src.ID, "err", err)
-			}
-		}
-
-		// Write cross-calendar busy events (events from other sources).
-		if src.CrossBusy {
-			if err := e.writeCrossBusy(ctx, conn, src, events); err != nil {
-				e.log.Error("write cross-busy", "source", src.ID, "err", err)
-			}
-		}
-	}
 	return nil
 }
 
@@ -144,7 +127,7 @@ func (e *Emitter) writeCrossBusy(ctx context.Context, conn connector.Connector, 
 	return nil
 }
 
-func (e *Emitter) writebackCfgForBlock(t store.BlockType) config.BlockWriteback {
+func (e *Emitter) writebackCfgForBlock(t store.BlockType) BlockConfig {
 	switch t {
 	case store.BlockFocus:
 		return e.cfg.Focus
@@ -153,7 +136,7 @@ func (e *Emitter) writebackCfgForBlock(t store.BlockType) config.BlockWriteback 
 	case store.BlockBreak:
 		return e.cfg.Break
 	default:
-		return config.BlockWriteback{}
+		return BlockConfig{}
 	}
 }
 

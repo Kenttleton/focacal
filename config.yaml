@@ -35,39 +35,13 @@ ollama:
 
 # Calendar sources — add one entry per Google or Outlook account.
 sources:
-  - id: "work-google"            # unique slug — used in logs and writeback keys
+  - id: "work-google"            # unique slug
     type: "google"
-    writeback: true              # write AI-planned blocks back to this calendar
-    cross_busy: false            # show events from other sources as "Busy" here
     calendar_ids: []             # empty = primary calendar only
 
   # - id: "personal-outlook"
   #   type: "outlook"
-  #   writeback: false
-  #   cross_busy: true
   #   calendar_ids: []
-
-# Controls how AI-planned blocks appear on source calendars (when writeback: true).
-writeback:
-  cross_busy_title: "Meeting"    # title for cross-calendar busy blocks
-
-  focus:
-    enabled: true
-    title: "Focus time"
-    show_as: "busy"              # busy | free | tentative
-    description: ""              # leave blank to omit description
-
-  lunch:
-    enabled: true
-    title: "Lunch"
-    show_as: "free"
-    description: ""
-
-  break:
-    enabled: false               # set true to also write short breaks
-    title: "Break"
-    show_as: "free"
-    description: ""
 
 # Internal server ports — these are container-internal ports.
 # To change the HOST port, set CALDAV_PORT / REST_PORT / MCP_PORT in .env.
@@ -77,6 +51,7 @@ server:
   mcp_port: 5234
   oauth_port: 8080
   bind_address: "0.0.0.0"
+  webhooks_enabled: false        # polling every 5 minutes covers it
 
 oauth:
   # Also configurable via OAUTH_REDIRECT_BASE_URL env var.

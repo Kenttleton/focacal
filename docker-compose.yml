@@ -34,7 +34,7 @@ services:
       # Persistent data: SQLite DB, OAuth tokens, ICS cache.
       - focacal-data:/data
       # Config file mount — edit on the host, picked up on restart.
-      - ./config.yaml:/data/config.yaml:ro
+      - ./config.yaml:/data/config.yaml
 
     # Allows Ollama running on the host (not in Docker) to be reachable
     # via host.docker.internal on both Mac and Linux.

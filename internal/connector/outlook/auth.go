@@ -38,11 +38,6 @@ func New(cfg config.SourceConfig, db *store.DB, redirectURL, tenantID string) (*
 		tenantID = "common"
 	}
 
-	scopes := []string{scopeOpenID, scopeProfile, scopeOfflineAccess, scopeCalendarsRead}
-	if cfg.Writeback || cfg.CrossBusy {
-		scopes = append(scopes, scopeCalendarsReadWrite)
-	}
-
 	clientID, clientSecret, err := loadClientCredentials(cfg)
 	if err != nil {
 		return nil, err
@@ -51,7 +46,7 @@ func New(cfg config.SourceConfig, db *store.DB, redirectURL, tenantID string) (*
 	oauthCfg := &oauth2.Config{
 		ClientID:     clientID,
 		ClientSecret: clientSecret,
-		Scopes:       scopes,
+		Scopes:       []string{scopeOpenID, scopeProfile, scopeOfflineAccess, scopeCalendarsRead},
 		Endpoint:     microsoft.AzureADEndpoint(tenantID),
 		RedirectURL:  redirectURL + "/oauth/callback/outlook",
 	}

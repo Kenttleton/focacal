@@ -32,24 +32,6 @@ func SetDefaults() {
 	viper.SetDefault("agent.timeout_secs", 120)
 	viper.SetDefault("agent.max_tokens", 4096)
 
-	// Writeback defaults
-	viper.SetDefault("writeback.cross_busy_title", "Meeting")
-
-	viper.SetDefault("writeback.focus.enabled", true)
-	viper.SetDefault("writeback.focus.title", "Focus time")
-	viper.SetDefault("writeback.focus.show_as", "busy")
-	viper.SetDefault("writeback.focus.description", "")
-
-	viper.SetDefault("writeback.lunch.enabled", true)
-	viper.SetDefault("writeback.lunch.title", "Lunch")
-	viper.SetDefault("writeback.lunch.show_as", "free")
-	viper.SetDefault("writeback.lunch.description", "")
-
-	viper.SetDefault("writeback.break.enabled", false)
-	viper.SetDefault("writeback.break.title", "Break")
-	viper.SetDefault("writeback.break.show_as", "free")
-	viper.SetDefault("writeback.break.description", "")
-
 	// OSS auth — single static API key; auto-generated on first boot if empty
 	viper.SetDefault("auth.enabled", true)
 	viper.SetDefault("auth.api_key", "")
@@ -60,6 +42,7 @@ func SetDefaults() {
 	viper.SetDefault("server.mcp_port", 5234)
 	viper.SetDefault("server.oauth_port", 8080)
 	viper.SetDefault("server.bind_address", "0.0.0.0")
+	viper.SetDefault("server.webhooks_enabled", false)
 
 	// OAuth
 	viper.SetDefault("oauth.redirect_base_url", "http://localhost:8080")

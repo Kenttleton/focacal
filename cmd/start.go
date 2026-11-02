@@ -21,7 +21,6 @@ import (
 	outlookconn "github.com/Kenttleton/focacal/internal/connector/outlook"
 	"github.com/Kenttleton/focacal/internal/emitter/caldav"
 	"github.com/Kenttleton/focacal/internal/emitter/rest"
-	"github.com/Kenttleton/focacal/internal/emitter/writeback"
 	"github.com/Kenttleton/focacal/internal/mcp"
 	"github.com/Kenttleton/focacal/internal/store"
 )
@@ -101,8 +100,6 @@ func runStart(_ *cobra.Command, _ []string) error {
 	caldavSrv.WrapHandler(authMW)
 	restSrv.WrapHandler(authMW)
 	mcpSrv.WrapHandler(authMW)
-	wbEmitter := writeback.New(db, cfg.Writeback, connectors, cfg.Sources, log)
-
 	// Build the Ollama agent.
 	agent := mcp.NewAgent(cfg, cfg.Server.MCPPort, log)
 
@@ -127,7 +124,7 @@ func runStart(_ *cobra.Command, _ []string) error {
 			log.Info("bus: notifying emitters", "request_id", msg.RequestID)
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
-			for _, e := range []interface{ Notify(context.Context) error }{caldavSrv, restSrv, mcpSrv, wbEmitter} {
+			for _, e := range []interface{ Notify(context.Context) error }{caldavSrv, restSrv, mcpSrv} {
 				if err := e.Notify(ctx); err != nil {
 					log.Error("emitter notify failed", "err", err)
 				}
@@ -156,7 +153,9 @@ func runStart(_ *cobra.Command, _ []string) error {
 	// idempotent and renews subscriptions only when they are about to expire.
 	webhookBase := cfg.OAuth.RedirectBaseURL
 	go func() {
-		registerWebhooks(ctx, log, connectors, webhookBase)
+		if cfg.Server.WebhooksEnabled {
+			registerWebhooks(ctx, log, connectors, webhookBase)
+		}
 		syncAll(ctx, log, connectors, b, db)
 		ticker := time.NewTicker(5 * time.Minute)
 		defer ticker.Stop()
@@ -165,7 +164,9 @@ func runStart(_ *cobra.Command, _ []string) error {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				registerWebhooks(ctx, log, connectors, webhookBase)
+				if cfg.Server.WebhooksEnabled {
+					registerWebhooks(ctx, log, connectors, webhookBase)
+				}
 				syncAll(ctx, log, connectors, b, db)
 			}
 		}

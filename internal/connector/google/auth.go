@@ -31,13 +31,8 @@ type Connector struct {
 
 // New creates a Google Connector from source config.
 func New(cfg config.SourceConfig, db *store.DB, redirectURL string) (*Connector, error) {
-	scopes := []string{scopeCalendarReadonly}
-	if cfg.Writeback || cfg.CrossBusy {
-		scopes = append(scopes, scopeCalendarEvents)
-	}
-
 	oauthCfg := &oauth2.Config{
-		Scopes:      scopes,
+		Scopes:      []string{scopeCalendarReadonly},
 		Endpoint:    google.Endpoint,
 		RedirectURL: redirectURL + "/oauth/callback/google",
 	}
