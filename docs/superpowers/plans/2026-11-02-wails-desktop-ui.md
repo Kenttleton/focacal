@@ -78,11 +78,9 @@ Replace the single static API key with username/password:
 - Desktop/web store the exchanged token, not the raw password.
 - Keep backward compat: if `auth.api_key` is set and no password, accept it (migration).
 
-## Desktop-specific: remote backend support
-- Desktop app settings: configurable backend URL (default http://localhost:5233) + API key.
-- When backend URL is set and reachable, desktop uses REST API (like web build) instead of in-process bindings.
-- Allows a desktop client to point at a remote focacal deployment.
-- Store config in Wails app config; allow switching between "local embedded" and "remote" mode.
+## Backend routing
+- **Web UI**: assumes its own host (relative URLs, same origin). No backend URL config needed.
+- **Desktop (Wails)**: can run in embedded mode (in-process bindings) OR remote mode (configurable backend URL + exchanged token). Remote mode lets a desktop client point at a remote focacal deployment.
 
 ## Non-goals (for now)
 - Mobile.
