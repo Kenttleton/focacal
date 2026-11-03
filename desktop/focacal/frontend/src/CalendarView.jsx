@@ -39,6 +39,7 @@ const CalendarView = forwardRef(function CalendarView({ events, view }, ref) {
         headerToolbar={false}
         dayHeaderFormat={{ weekday: 'long' }}
         nowIndicator={true}
+        slotLabelFormat={{ hour: 'numeric', minute: '2-digit', meridiem: 'short' }}
         events={fcEvents}
         height="auto"
         dayHeaderClassNames="fc-dayheader-custom"
