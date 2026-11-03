@@ -16,14 +16,18 @@ export default function Settings({ onSaved }) {
   useEffect(() => { load() }, [])
 
   const openAdd = (type) => { setDrawerType(type); setForm({}); setDrawerOpen(true) }
+  const openEdit = (type, item) => { setDrawerType(type); setForm({ ...item }); setDrawerOpen(true) }
 
   const saveSource = async () => {
-    const list = [...sources, form]
+    const exists = sources.find(s => s.id === form.id)
+    const list = exists ? sources.map(s => s.id === form.id ? form : s) : [...sources, form]
     await api('/config/sources', { method: 'PUT', body: JSON.stringify(list) })
     setDrawerOpen(false); load()
   }
   const saveDest = async () => {
-    const list = [...dests, form]
+    const key = d => d.id + '|' + d.calendar_id
+    const exists = dests.find(d => key(d) === key(form))
+    const list = exists ? dests.map(d => key(d) === key(form) ? form : d) : [...dests, form]
     await api('/config/destinations', { method: 'PUT', body: JSON.stringify(list) })
     setDrawerOpen(false); load()
   }
@@ -42,13 +46,14 @@ export default function Settings({ onSaved }) {
       <Title order={4}>Sources</Title>
       <Text size="sm" c="dimmed">{(sources || []).length} configured</Text>
       <Button size="xs" onClick={() => openAdd('source')}>Add source</Button>
-      <ul>{(sources || []).map(s => <li key={s.id}>{s.id} ({s.type})</li>)}</ul>
+      <ul>{(sources || []).map(s => <li key={s.id}>{s.id} ({s.type}) <Button size="xs" variant="subtle" onClick={() => openEdit('source', s)}>Edit</Button></li>)}</ul>
+      <Button size="xs" variant="light" onClick={() => window.open('/calendar.ics', '_blank')}>Export ICS</Button>
 
       <Divider />
       <Title order={4}>Destinations</Title>
       <Text size="sm" c="dimmed">{(dests || []).length} configured</Text>
       <Button size="xs" onClick={() => openAdd('destination')}>Add destination</Button>
-      <ul>{(dests || []).map(d => <li key={d.id + d.calendar_id}>{d.id}/{d.calendar_id}</li>)}</ul>
+      <ul>{(dests || []).map(d => <li key={d.id + d.calendar_id}>{d.id}/{d.calendar_id} <Button size="xs" variant="subtle" onClick={() => openEdit('destination', d)}>Edit</Button></li>)}</ul>
 
       <Divider />
       <Title order={4}>Notifications</Title>
