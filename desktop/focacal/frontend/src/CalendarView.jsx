@@ -77,4 +77,3 @@ const CalendarView = forwardRef(function CalendarView({ events, view }, ref) {
 })
 
 export default CalendarView
-EOF
