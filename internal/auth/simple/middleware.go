@@ -9,54 +9,68 @@ import (
 	"net/http"
 	"strings"
 
+	"golang.org/x/crypto/bcrypt"
+
 	"github.com/Kenttleton/focacal/internal/config"
 )
 
-// Middleware returns an HTTP middleware that enforces the static API key
-// configured in auth.api_key.
-//
-// Requests must supply the key as:
-//   - Header:      Authorization: ApiKey <key>
-//   - Query param: ?api_key=<key>  (for CalDAV clients that cannot set headers)
-//
-// If auth.enabled = false the middleware is a no-op — all requests pass through.
-// If auth.api_key is empty, a key is auto-generated, printed to stdout once,
-// and used for the lifetime of the process (restart to get a new key).
+// Middleware returns an HTTP middleware enforcing auth.
 func Middleware(cfg config.AuthConfig, log *slog.Logger) func(http.Handler) http.Handler {
 	if !cfg.Enabled {
 		return func(next http.Handler) http.Handler { return next }
 	}
 
 	key := cfg.APIKey
-	if key == "" {
-		key = generateKey()
-		log.Info("OSS auth: no api_key configured — generated one for this session",
+	if key == "" && cfg.PasswordHash == "" {
+		key = GenerateKey()
+		log.Info("OSS auth: no credentials configured — generated a session key",
 			"api_key", key,
-			"hint", "set auth.api_key in config.yaml to make it persistent",
+			"hint", "set auth.api_key or run /auth/setup to create a password",
 		)
 		fmt.Printf("\n[focacal] Generated API key: %s\n\n", key)
 	}
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			candidate := extractKey(r)
-			if candidate == "" || !constantTimeEqual(candidate, key) {
-				w.Header().Set("WWW-Authenticate", `ApiKey realm="focacal"`)
-				http.Error(w, "unauthorized", http.StatusUnauthorized)
+			// Allow setup/login endpoints without auth.
+			if r.URL.Path == "/auth/setup" || r.URL.Path == "/auth/login" {
+				next.ServeHTTP(w, r)
 				return
 			}
-			next.ServeHTTP(w, r)
+			candidate := extractKey(r)
+			if candidate == "" {
+				unauthorized(w)
+				return
+			}
+			if key != "" && constantTimeEqual(candidate, key) {
+				next.ServeHTTP(w, r)
+				return
+			}
+			if cfg.SessionToken != "" {
+				if err := bcrypt.CompareHashAndPassword([]byte(cfg.SessionToken), []byte(candidate)); err == nil {
+					next.ServeHTTP(w, r)
+					return
+				}
+			}
+			if cfg.APIKey != "" && constantTimeEqual(candidate, cfg.APIKey) {
+				next.ServeHTTP(w, r)
+				return
+			}
+			unauthorized(w)
 		})
 	}
 }
 
-// extractKey reads the API key from the Authorization header or api_key query param.
+func unauthorized(w http.ResponseWriter) {
+	w.Header().Set("WWW-Authenticate", `Bearer realm="focacal"`)
+	http.Error(w, "unauthorized", http.StatusUnauthorized)
+}
+
 func extractKey(r *http.Request) string {
 	if h := r.Header.Get("Authorization"); h != "" {
 		if after, ok := strings.CutPrefix(h, "ApiKey "); ok {
 			return strings.TrimSpace(after)
 		}
-		// Also accept Bearer for clients that only support OAuth-style headers.
 		if after, ok := strings.CutPrefix(h, "Bearer "); ok {
 			return strings.TrimSpace(after)
 		}
@@ -64,16 +78,36 @@ func extractKey(r *http.Request) string {
 	return r.URL.Query().Get("api_key")
 }
 
-// constantTimeEqual compares two strings in constant time to prevent timing attacks.
 func constantTimeEqual(a, b string) bool {
 	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
 }
 
-// generateKey returns a 32-character random hex string (128 bits of entropy).
-func generateKey() string {
+// GenerateKey returns a random session key.
+func GenerateKey() string {
+	return generateKeyImpl()
+}
+
+func generateKeyImpl() string {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
 		panic("auth: cannot generate API key: " + err.Error())
 	}
 	return hex.EncodeToString(b)
+}
+
+// HashPassword hashes a password with bcrypt.
+func HashPassword(pw string) (string, error) {
+	h, err := bcrypt.GenerateFromPassword([]byte(pw), bcrypt.DefaultCost)
+	return string(h), err
+}
+
+// VerifyPassword checks a password against a bcrypt hash.
+func VerifyPassword(hash, pw string) bool {
+	return bcrypt.CompareHashAndPassword([]byte(hash), []byte(pw)) == nil
+}
+
+// HashToken hashes a session token with bcrypt.
+func HashToken(tok string) (string, error) {
+	h, err := bcrypt.GenerateFromPassword([]byte(tok), bcrypt.DefaultCost)
+	return string(h), err
 }

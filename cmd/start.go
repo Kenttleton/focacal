@@ -104,7 +104,7 @@ func runStart(_ *cobra.Command, _ []string) error {
 	mcpSrv := mcp.New(mcpAddr, log)
 
 	// Apply OSS auth middleware to all servers (no-op when auth.enabled = false).
-	authMW := simple.Middleware(cfg.Auth, log)
+	authMW := simple.Middleware(cfg.GlobalConfig.Auth, log)
 	caldavSrv.WrapHandler(authMW)
 	restSrv.WrapHandler(authMW)
 	mcpSrv.WrapHandler(authMW)

@@ -28,6 +28,7 @@ type UserConfig struct {
 	Sources      []SourceConfig    `mapstructure:"sources"`
 	Destinations []DestinationConfig `mapstructure:"destinations"`
 	Colors       map[string]string `mapstructure:"colors"`
+	Auth         AuthConfig        `mapstructure:"auth"`
 }
 
 // GlobalConfig holds deployment-level settings shared across all users.
@@ -225,8 +226,11 @@ type OAuthConfig struct {
 // AuthConfig controls the lightweight OSS authentication layer.
 // Set enabled=false for trusted LAN deployments that need no protection.
 type AuthConfig struct {
-	Enabled bool   `mapstructure:"enabled"` // default true
-	APIKey  string `mapstructure:"api_key"` // auto-generated on first boot if empty
+	Enabled      bool   `mapstructure:"enabled"`        // default true
+	APIKey       string `mapstructure:"api_key"`       // legacy static key (backward compat)
+	Username     string `mapstructure:"username"`      // login username
+	PasswordHash string `mapstructure:"password_hash"` // bcrypt hash
+	SessionToken string `mapstructure:"session_token"` // hashed session token
 }
 
 // Load reads and unmarshals config from viper.

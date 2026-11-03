@@ -17,6 +17,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/spf13/viper"
+	"github.com/Kenttleton/focacal/internal/auth/simple"
 	"github.com/Kenttleton/focacal/internal/bus"
 	"github.com/Kenttleton/focacal/internal/conflict"
 	"github.com/Kenttleton/focacal/internal/config"
@@ -74,6 +75,9 @@ func New(connectors map[string]connector.Connector, health *HealthState, addr st
 	r.Use(corsMiddleware)
 
 	r.Get("/health", s.handleHealth)
+	r.Post("/auth/setup", s.handleAuthSetup)
+	r.Post("/auth/login", s.handleAuthLogin)
+	r.Post("/auth/reset", s.handleAuthReset)
 	r.Get("/today", s.handleToday)
 	r.Get("/now", s.handleNow)
 	r.Post("/replan", s.handleReplan)
@@ -803,6 +807,110 @@ func parseRange(r *http.Request) (time.Time, time.Time) {
 		}
 	}
 	return from, to
+}
+
+func (s *Server) handleAuthSetup(w http.ResponseWriter, r *http.Request) {
+	var u struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&u); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	uc := config.UserConfigFromContext(r.Context())
+	// only allow if no password set yet
+	if uc.Auth.PasswordHash != "" {
+		writeError(w, http.StatusForbidden, "already configured")
+		return
+	}
+	h, err := simple.HashPassword(u.Password)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	uc.Auth.Username = u.Username
+	uc.Auth.PasswordHash = h
+	// generate session token
+	tok := simple.GenerateKey()
+	th, _ := simple.HashToken(tok)
+	uc.Auth.SessionToken = th
+	// persist
+	path := viper.ConfigFileUsed()
+	if path != "" {
+		config.WriteSections(path, map[string]any{
+			"auth": map[string]any{
+				"enabled":       true,
+				"username":      uc.Auth.Username,
+				"password_hash": uc.Auth.PasswordHash,
+				"session_token": uc.Auth.SessionToken,
+			},
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"token": tok})
+}
+
+func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
+	var u struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&u); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	uc := config.UserConfigFromContext(r.Context())
+	if uc.Auth.Username != u.Username || !simple.VerifyPassword(uc.Auth.PasswordHash, u.Password) {
+		writeError(w, http.StatusUnauthorized, "invalid credentials")
+		return
+	}
+	tok := simple.GenerateKey()
+	th, _ := simple.HashToken(tok)
+	uc.Auth.SessionToken = th
+	path := viper.ConfigFileUsed()
+	if path != "" {
+		config.WriteSections(path, map[string]any{
+			"auth": map[string]any{
+				"enabled":       true,
+				"username":      uc.Auth.Username,
+				"password_hash": uc.Auth.PasswordHash,
+				"session_token": uc.Auth.SessionToken,
+			},
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"token": tok})
+}
+
+func (s *Server) handleAuthReset(w http.ResponseWriter, r *http.Request) {
+	var u struct {
+		NewPassword string `json:"new_password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&u); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	uc := config.UserConfigFromContext(r.Context())
+	h, err := simple.HashPassword(u.NewPassword)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	uc.Auth.PasswordHash = h
+	tok := simple.GenerateKey()
+	th, _ := simple.HashToken(tok)
+	uc.Auth.SessionToken = th
+	path := viper.ConfigFileUsed()
+	if path != "" {
+		config.WriteSections(path, map[string]any{
+			"auth": map[string]any{
+				"enabled":       true,
+				"username":      uc.Auth.Username,
+				"password_hash": uc.Auth.PasswordHash,
+				"session_token": uc.Auth.SessionToken,
+			},
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"token": tok})
 }
 
 func sortDTOs(dtos []EventDTO) {
