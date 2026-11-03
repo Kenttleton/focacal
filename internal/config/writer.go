@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -81,62 +82,68 @@ func (w *Writer) Update(fn func(doc *yaml.Node) error) error {
 		return fmt.Errorf("encode config %s: %w", w.path, err)
 	}
 
-	renameErr := w.writeViaRename(buf.Bytes(), mode)
+	tmpName, err := w.writeTemp(buf.Bytes(), mode)
+	if err != nil {
+		// Temp stage failed: the target is untouched, so do not fall back.
+		return fmt.Errorf("write temp config for %s: %w", w.path, err)
+	}
+	renameErr := renameFile(tmpName, w.path)
 	if renameErr == nil {
 		return nil
 	}
+	os.Remove(tmpName)
 	return w.writeInPlace(buf.Bytes(), data, existed, mode, renameErr)
 }
 
-// writeViaRename writes b to a same-directory temp file, fsyncs it, and
-// renames it over the target. The temp file is removed on any failure.
-func (w *Writer) writeViaRename(b []byte, mode os.FileMode) (err error) {
+// writeTemp writes b to a same-directory temp file and fsyncs it, returning
+// its name. The temp file is removed on any failure.
+func (w *Writer) writeTemp(b []byte, mode os.FileMode) (name string, err error) {
 	tmp, err := os.CreateTemp(filepath.Dir(w.path), filepath.Base(w.path)+".*.tmp")
 	if err != nil {
-		return err
+		return "", err
 	}
-	tmpName := tmp.Name()
+	name = tmp.Name()
 	defer func() {
 		if err != nil {
-			os.Remove(tmpName)
+			os.Remove(name)
 		}
 	}()
 	if _, err = tmp.Write(b); err != nil {
 		tmp.Close()
-		return err
+		return "", err
 	}
 	if err = tmp.Chmod(mode); err != nil {
 		tmp.Close()
-		return err
+		return "", err
 	}
 	if err = tmp.Sync(); err != nil {
 		tmp.Close()
-		return err
+		return "", err
 	}
 	if err = tmp.Close(); err != nil {
-		return err
+		return "", err
 	}
-	return renameFile(tmpName, w.path)
+	return name, nil
 }
 
 // writeInPlace is the fallback: back up the old bytes, then truncate and rewrite.
 func (w *Writer) writeInPlace(b, old []byte, existed bool, mode os.FileMode, renameErr error) error {
 	if existed {
 		if err := os.WriteFile(w.path+".bak", old, mode); err != nil {
-			return fmt.Errorf("write config backup (after rename failed: %v): %w", renameErr, err)
+			return fmt.Errorf("write config backup: %w", errors.Join(err, renameErr))
 		}
 	}
 	f, err := os.OpenFile(w.path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode)
 	if err != nil {
-		return fmt.Errorf("open config %s (after rename failed: %v): %w", w.path, renameErr, err)
+		return fmt.Errorf("open config %s: %w", w.path, errors.Join(err, renameErr))
 	}
 	if _, err := f.Write(b); err != nil {
 		f.Close()
-		return fmt.Errorf("write config %s: %w", w.path, err)
+		return fmt.Errorf("write config %s: %w", w.path, errors.Join(err, renameErr))
 	}
 	if err := f.Sync(); err != nil {
 		f.Close()
-		return fmt.Errorf("sync config %s: %w", w.path, err)
+		return fmt.Errorf("sync config %s: %w", w.path, errors.Join(err, renameErr))
 	}
 	return f.Close()
 }

@@ -185,3 +185,33 @@ func TestUpdateOnEmptyFileGivesEmptyMapping(t *testing.T) {
 		t.Fatalf("kind=%v child=%v", kind, childKind)
 	}
 }
+
+func TestUpdateTempStageFailureDoesNotFallBack(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("read-only directory is not enforced for root")
+	}
+	dir := t.TempDir()
+	p := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(p, []byte("a: 1\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0555); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(dir, 0755)
+
+	err := NewWriter(p).Update(func(doc *yaml.Node) error {
+		addKey(doc, "b", "2")
+		return nil
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	got, _ := os.ReadFile(p)
+	if string(got) != "a: 1\n" {
+		t.Fatalf("target changed: %q", got)
+	}
+	if _, err := os.Stat(p + ".bak"); !os.IsNotExist(err) {
+		t.Fatalf("unexpected .bak: %v", err)
+	}
+}
