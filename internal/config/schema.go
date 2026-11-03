@@ -45,9 +45,9 @@ type GlobalConfig struct {
 
 // WorkingHours defines when the user is available.
 type WorkingHours struct {
-	Start    string `mapstructure:"start"`    // "09:00"
-	End      string `mapstructure:"end"`      // "18:00"
-	Timezone string `mapstructure:"timezone"` // "America/New_York"
+	Start    string `mapstructure:"start" json:"start" yaml:"start"`    // "09:00"
+	End      string `mapstructure:"end" json:"end" yaml:"end"`      // "18:00"
+	Timezone string `mapstructure:"timezone" json:"timezone" yaml:"timezone"` // "America/New_York"
 }
 
 // StartTime parses WorkingHours.Start as a time.Duration offset from midnight.
@@ -64,19 +64,19 @@ func (w WorkingHours) Location() (*time.Location, error) {
 }
 
 type LunchConfig struct {
-	Preferred       string `mapstructure:"preferred"`        // "12:00"
-	WindowStart     string `mapstructure:"window_start"`     // "11:30"
-	WindowEnd       string `mapstructure:"window_end"`       // "13:30"
-	DurationMinutes int    `mapstructure:"duration_minutes"` // 60
+	Preferred       string `mapstructure:"preferred" json:"preferred" yaml:"preferred"`        // "12:00"
+	WindowStart     string `mapstructure:"window_start" json:"window_start" yaml:"window_start"`     // "11:30"
+	WindowEnd       string `mapstructure:"window_end" json:"window_end" yaml:"window_end"`       // "13:30"
+	DurationMinutes int    `mapstructure:"duration_minutes" json:"duration_minutes" yaml:"duration_minutes"` // 60
 }
 
 type FocusConfig struct {
-	Style                string `mapstructure:"style"`                    // flexible | pomodoro | fixed
-	MinBlockMinutes      int    `mapstructure:"min_block_minutes"`        // 30
-	MaxBlockMinutes      int    `mapstructure:"max_block_minutes"`        // 120
-	BufferAroundMeetings int    `mapstructure:"buffer_around_meetings"`   // 10
-	PomodoroWorkMinutes  int    `mapstructure:"pomodoro_work_minutes"`    // 25
-	PomodoroBreakMinutes int    `mapstructure:"pomodoro_break_minutes"`   // 5
+	Style                string `mapstructure:"style" json:"style" yaml:"style"`                    // flexible | pomodoro | fixed
+	MinBlockMinutes      int    `mapstructure:"min_block_minutes" json:"min_block_minutes" yaml:"min_block_minutes"`        // 30
+	MaxBlockMinutes      int    `mapstructure:"max_block_minutes" json:"max_block_minutes" yaml:"max_block_minutes"`        // 120
+	BufferAroundMeetings int    `mapstructure:"buffer_around_meetings" json:"buffer_around_meetings" yaml:"buffer_around_meetings"`   // 10
+	PomodoroWorkMinutes  int    `mapstructure:"pomodoro_work_minutes" json:"pomodoro_work_minutes" yaml:"pomodoro_work_minutes"`    // 25
+	PomodoroBreakMinutes int    `mapstructure:"pomodoro_break_minutes" json:"pomodoro_break_minutes" yaml:"pomodoro_break_minutes"`   // 5
 }
 
 // AgentConfig points the scheduler at any OpenAI-compatible chat completions
@@ -92,32 +92,32 @@ type AgentConfig struct {
 
 // SourceConfig describes a single calendar account (Google, Outlook, CalDAV, ICS).
 type SourceConfig struct {
-	ID              string         `mapstructure:"id"`               // unique slug, e.g. "work-google"
-	Label           string         `mapstructure:"label"`            // free-text display name
-	Type            string         `mapstructure:"type"`             // google | outlook | caldav | ics
-	CredentialsFile string         `mapstructure:"credentials_file"` // path inside container
-	TokenFile       string         `mapstructure:"token_file"`       // path inside container (runtime)
-	CalendarIDs     []string       `mapstructure:"calendar_ids"`     // empty = all/primary
-	Conflicts       ConflictConfig `mapstructure:"conflicts"`
+	ID              string         `mapstructure:"id" json:"id" yaml:"id"`               // unique slug, e.g. "work-google"
+	Label           string         `mapstructure:"label" json:"label" yaml:"label"`            // free-text display name
+	Type            string         `mapstructure:"type" json:"type" yaml:"type"`             // google | outlook | caldav | ics
+	CredentialsFile string         `mapstructure:"credentials_file" json:"credentials_file" yaml:"credentials_file"` // path inside container
+	TokenFile       string         `mapstructure:"token_file" json:"token_file" yaml:"token_file"`       // path inside container (runtime)
+	CalendarIDs     []string       `mapstructure:"calendar_ids" json:"calendar_ids" yaml:"calendar_ids"`     // empty = all/primary
+	Conflicts       ConflictConfig `mapstructure:"conflicts" json:"conflicts" yaml:"conflicts"`
 
 	// CalDAV-specific fields (type: caldav)
-	CalDAVURL string `mapstructure:"caldav_url"`  // e.g. https://caldav.icloud.com
-	Username  string `mapstructure:"username"`    // Basic Auth (iCloud: Apple ID email)
-	Password  string `mapstructure:"password"`    // Basic Auth password or app-specific password
-	AuthType  string `mapstructure:"auth_type"`   // basic (default) | bearer
+	CalDAVURL string `mapstructure:"caldav_url" json:"caldav_url" yaml:"caldav_url"`  // e.g. https://caldav.icloud.com
+	Username  string `mapstructure:"username" json:"username" yaml:"username"`    // Basic Auth (iCloud: Apple ID email)
+	Password  string `mapstructure:"password" json:"password" yaml:"password"`    // Basic Auth password or app-specific password
+	AuthType  string `mapstructure:"auth_type" json:"auth_type" yaml:"auth_type"`   // basic (default) | bearer
 
 	// ICS-specific fields (type: ics)
-	ICSURL    string `mapstructure:"ics_url"`     // secret feed URL
-	ICSURLEnv string `mapstructure:"ics_url_env"` // env var holding the feed URL
+	ICSURL    string `mapstructure:"ics_url" json:"ics_url" yaml:"ics_url"`     // secret feed URL
+	ICSURLEnv string `mapstructure:"ics_url_env" json:"ics_url_env" yaml:"ics_url_env"` // env var holding the feed URL
 }
 
 // ConflictConfig holds per-source switches for what counts as a conflict.
 // Nil means the documented default.
 type ConflictConfig struct {
-	Declined *bool `mapstructure:"declined"`
-	Tentative *bool `mapstructure:"tentative"`
-	Free     *bool `mapstructure:"free"`
-	AllDay   *bool `mapstructure:"all_day"`
+	Declined *bool `mapstructure:"declined" json:"declined" yaml:"declined"`
+	Tentative *bool `mapstructure:"tentative" json:"tentative" yaml:"tentative"`
+	Free     *bool `mapstructure:"free" json:"free" yaml:"free"`
+	AllDay   *bool `mapstructure:"all_day" json:"all_day" yaml:"all_day"`
 }
 
 func (c ConflictConfig) CountsDeclined() bool {
@@ -150,38 +150,38 @@ func (c ConflictConfig) CountsAllDay() bool {
 
 // DestinationConfig describes an output destination calendar.
 type DestinationConfig struct {
-	ID              string              `mapstructure:"id"`
-	CalendarID      string              `mapstructure:"calendar_id"`
-	Type            string              `mapstructure:"type"`             // export-only connection type
-	CredentialsFile string              `mapstructure:"credentials_file"`
-	TokenFile       string              `mapstructure:"token_file"`
-	CalDAVURL       string              `mapstructure:"caldav_url"`
-	Username        string              `mapstructure:"username"`
-	Password        string              `mapstructure:"password"`
-	AuthType        string              `mapstructure:"auth_type"`
-	ICSURL          string              `mapstructure:"ics_url"`
-	ICSURLEnv       string              `mapstructure:"ics_url_env"`
-	CalendarIDs     []string            `mapstructure:"calendar_ids"`
-	Sources         []DestinationSource `mapstructure:"sources"`
+	ID              string              `mapstructure:"id" json:"id" yaml:"id"`
+	CalendarID      string              `mapstructure:"calendar_id" json:"calendar_id" yaml:"calendar_id"`
+	Type            string              `mapstructure:"type" json:"type" yaml:"type"`             // export-only connection type
+	CredentialsFile string              `mapstructure:"credentials_file" json:"credentials_file" yaml:"credentials_file"`
+	TokenFile       string              `mapstructure:"token_file" json:"token_file" yaml:"token_file"`
+	CalDAVURL       string              `mapstructure:"caldav_url" json:"caldav_url" yaml:"caldav_url"`
+	Username        string              `mapstructure:"username" json:"username" yaml:"username"`
+	Password        string              `mapstructure:"password" json:"password" yaml:"password"`
+	AuthType        string              `mapstructure:"auth_type" json:"auth_type" yaml:"auth_type"`
+	ICSURL          string              `mapstructure:"ics_url" json:"ics_url" yaml:"ics_url"`
+	ICSURLEnv       string              `mapstructure:"ics_url_env" json:"ics_url_env" yaml:"ics_url_env"`
+	CalendarIDs     []string            `mapstructure:"calendar_ids" json:"calendar_ids" yaml:"calendar_ids"`
+	Sources         []DestinationSource `mapstructure:"sources" json:"sources" yaml:"sources"`
 }
 
 // DestinationSource refers to an input calendar (or focacal) shown in a destination.
 type DestinationSource struct {
-	ID     string          `mapstructure:"id"`
-	CalendarID string       `mapstructure:"calendar_id"`
-	Event  EventVisibility `mapstructure:"event"`
+	ID     string          `mapstructure:"id" json:"id" yaml:"id"`
+	CalendarID string       `mapstructure:"calendar_id" json:"calendar_id" yaml:"calendar_id"`
+	Event  EventVisibility `mapstructure:"event" json:"event" yaml:"event"`
 }
 
 // EventVisibility holds title/body visibility for a destination source entry.
 type EventVisibility struct {
-	Title FieldVisibility `mapstructure:"title"`
-	Body  FieldVisibility `mapstructure:"body"`
+	Title FieldVisibility `mapstructure:"title" json:"title" yaml:"title"`
+	Body  FieldVisibility `mapstructure:"body" json:"body" yaml:"body"`
 }
 
 // FieldVisibility controls whether and how a field is shown.
 type FieldVisibility struct {
-	Visibility bool   `mapstructure:"visibility"`
-	Rename     string `mapstructure:"rename"`
+	Visibility bool   `mapstructure:"visibility" json:"visibility" yaml:"visibility"`
+	Rename     string `mapstructure:"rename" json:"rename" yaml:"rename"`
 }
 
 // EffectiveCalendarIDs returns the declared list, or the type default when empty.
