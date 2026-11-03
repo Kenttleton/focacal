@@ -147,3 +147,16 @@ func TestPatchAbsentCollectionCreated(t *testing.T) {
 	got = patchYAML(t, got, map[string]any{"sources": nil}, testCollections)
 	expectYAML(t, got, "a: 1\n")
 }
+
+func TestPatchDeleteFirstKeyKeepsHeaderComment(t *testing.T) {
+	got := patchYAML(t, "# top\na: 1\nb: 2\n", map[string]any{"a": nil}, nil)
+	expectYAML(t, got, "# top\nb: 2\n")
+
+	// A middle key's own comment goes with it.
+	got = patchYAML(t, "a: 1\n# about b\nb: 2\nc: 3\n", map[string]any{"b": nil}, nil)
+	expectYAML(t, got, "a: 1\nc: 3\n")
+
+	// Only key: comment is moved to the mapping.
+	got = patchYAML(t, "# top\na: 1\n", map[string]any{"a": nil}, nil)
+	expectYAML(t, got, "# top\n{}\n")
+}

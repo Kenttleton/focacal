@@ -82,7 +82,26 @@ func findKey(m *yaml.Node, key string) int {
 	return -1
 }
 
+// removePair deletes the key/value pair whose value is at valIdx. When the
+// first pair is removed its head comment is usually a file or section header,
+// so it is handed to the next key (or to the mapping if none remains).
 func removePair(m *yaml.Node, valIdx int) {
+	if valIdx == 1 {
+		if hc := m.Content[0].HeadComment; hc != "" {
+			if len(m.Content) > 2 {
+				next := m.Content[2]
+				if next.HeadComment != "" {
+					hc += "\n\n" + next.HeadComment
+				}
+				next.HeadComment = hc
+			} else {
+				if m.HeadComment != "" {
+					hc += "\n\n" + m.HeadComment
+				}
+				m.HeadComment = hc
+			}
+		}
+	}
 	m.Content = append(m.Content[:valIdx-1], m.Content[valIdx+1:]...)
 }
 
