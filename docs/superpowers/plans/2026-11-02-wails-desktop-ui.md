@@ -86,8 +86,22 @@ Replace the single static API key with username/password:
 ## Desktop notifications
 - Cross-platform notifications via a Go library (e.g. `github.com/gen2brain/beeep`) invoked from bindings.
 - Triggers: new conflicts, new meetings synced, generated events created, calendar shifts/replans.
-- Per-category enable/disable in settings.
+- Per-category enable/disable in settings; per-event notification settings only for focacal-generated events.
 - Web build falls back to the Web Notification API.
+
+## UI decisions (settled)
+- Calendar views: Day/Week/Month toggle; default Month. Last-used view stored in browser storage; default view configurable in settings.
+- Start-of-week: setting (config) for which day begins the week.
+- Source toggles: like Google/Outlook calendar checkboxes — per-source (including focacal generated) stylized radio/checkbox to show/hide.
+- Conflict dismiss: marker stays, badge count decrements.
+- Settings IDs: read-only, auto-generated in guided forms.
+- Theme: light/dark/system, configurable in settings.
+- Navigation: left drawer (Calendar, Planner, Settings); right drawer (Conflicts, collapsed by default, red dot + count).
+- Sync: polling interval options 1/5/10/15/30/60 min (default 10). "Last synced" metadata shown with human-readable delta (now, 5m ago, 1h ago, else localized timestamp) + manual sync button. Offline pings silent.
+- Empty state: just the calendar, server time as source of truth, localized.
+- Accessibility: keyboard nav + ARIA for forms and navigation; calendar view best-effort.
+- Mobile: unsupported (desktop/laptop only).
+- Polling interval default changed from 5 to 10 minutes.
 
 ## Non-goals (for now)
 - Mobile.
