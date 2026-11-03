@@ -80,21 +80,23 @@ export default function App() {
 
       <main style={{ flex: 1, padding: 12, overflow: 'auto' }}>
         {!leftOpen && null}
-        <div style={{ marginBottom: 8, display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'space-between' }}>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button onClick={() => calRef.current?.prev()}>‹</button>
-            <button onClick={() => calRef.current?.today()}>Today</button>
-            <button onClick={() => calRef.current?.next()}>›</button>
+        {page === 'calendar' && (
+          <div style={{ marginBottom: 8, display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'space-between' }}>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button onClick={() => calRef.current?.prev()}>‹</button>
+              <button onClick={() => calRef.current?.today()}>Today</button>
+              <button onClick={() => calRef.current?.next()}>›</button>
+            </div>
+            <div style={{ fontWeight: 'bold', textAlign: 'center' }}>
+              {new Date().toLocaleString([], { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', timeZoneName: 'short' })}
+            </div>
+            <select value={view} onChange={e => changeView(e.target.value)}>
+              <option value="day">Day</option>
+              <option value="week">Week</option>
+              <option value="month">Month</option>
+            </select>
           </div>
-          <div style={{ fontWeight: 'bold', textAlign: 'center' }}>
-            {new Date().toLocaleString([], { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', timeZoneName: 'short' })}
-          </div>
-          <select value={view} onChange={e => changeView(e.target.value)}>
-            <option value="day">Day</option>
-            <option value="week">Week</option>
-            <option value="month">Month</option>
-          </select>
-        </div>
+        )}
         {page === 'calendar' && (
           <div>
             <CalendarView ref={calRef} events={events} view={view} />
