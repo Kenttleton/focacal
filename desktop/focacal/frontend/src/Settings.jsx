@@ -40,15 +40,15 @@ export default function Settings({ onSaved }) {
 
       <Divider />
       <Title order={4}>Sources</Title>
-      <Text size="sm" c="dimmed">{sources.length} configured</Text>
+      <Text size="sm" c="dimmed">{(sources || []).length} configured</Text>
       <Button size="xs" onClick={() => openAdd('source')}>Add source</Button>
-      <ul>{sources.map(s => <li key={s.id}>{s.id} ({s.type})</li>)}</ul>
+      <ul>{(sources || []).map(s => <li key={s.id}>{s.id} ({s.type})</li>)}</ul>
 
       <Divider />
       <Title order={4}>Destinations</Title>
-      <Text size="sm" c="dimmed">{dests.length} configured</Text>
+      <Text size="sm" c="dimmed">{(dests || []).length} configured</Text>
       <Button size="xs" onClick={() => openAdd('destination')}>Add destination</Button>
-      <ul>{dests.map(d => <li key={d.id + d.calendar_id}>{d.id}/{d.calendar_id}</li>)}</ul>
+      <ul>{(dests || []).map(d => <li key={d.id + d.calendar_id}>{d.id}/{d.calendar_id}</li>)}</ul>
 
       <Divider />
       <Title order={4}>Notifications</Title>
