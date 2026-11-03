@@ -36,3 +36,8 @@ raycast-extension/dist/
 
 # Docker
 docker-compose.override.yml
+
+# Local agent scratch and worktrees
+.claude/worktrees/
+.superpowers/
+.playwright-mcp/
