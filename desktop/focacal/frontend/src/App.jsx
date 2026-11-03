@@ -74,20 +74,23 @@ export default function App() {
   return (
     <MantineProvider defaultColorScheme="dark">
       <div style={{ display: 'flex', height: '100vh' }}>
-        {leftOpen ? (
-          <aside style={{ width: 200, borderRight: '1px solid #eee', padding: 12 }}>
-            <Button variant="subtle" size="xs" onClick={() => setLeftOpen(false)}>‹</Button>
-            <Stack mt="sm">
-              <Button variant="subtle" onClick={() => setPage('calendar')}>Calendar</Button>
-              <Button variant="subtle" onClick={() => setPage('planner')}>Planner</Button>
-              <Button variant="subtle" onClick={() => setPage('settings')}>Settings</Button>
-            </Stack>
-          </aside>
-        ) : (
-          <Button variant="subtle" size="xs" onClick={() => setLeftOpen(true)} style={{ width: 24 }}>›</Button>
-        )}
+        <Drawer opened={leftOpen} onClose={() => setLeftOpen(false)} title="Menu" position="left" size="xs">
+          <Stack>
+            <Button variant="subtle" onClick={() => { setPage('calendar'); setLeftOpen(false) }}>Calendar</Button>
+            <Button variant="subtle" onClick={() => { setPage('planner'); setLeftOpen(false) }}>Planner</Button>
+            <Button variant="subtle" onClick={() => { setPage('settings'); setLeftOpen(false) }}>Settings</Button>
+          </Stack>
+        </Drawer>
 
-        <main style={{ flex: 1, padding: 12, overflow: 'auto' }}>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+          <div style={{ padding: 8, borderBottom: '1px solid #333', display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Button variant="subtle" size="sm" onClick={() => setLeftOpen(true)}>☰</Button>
+            <Text fw={700} style={{ flex: 1 }}>focacal</Text>
+            <Button variant="subtle" size="sm" onClick={() => setRightOpen(true)} style={{ position: 'relative' }}>
+              Conflicts {openConflicts.length > 0 && <span style={{ color: 'red', marginLeft: 6 }}>●{openConflicts.length}</span>}
+            </Button>
+          </div>
+          <main style={{ flex: 1, padding: 12, overflow: 'auto' }}>
           {page === 'calendar' && (
             <>
               <Group mb="sm" justify="space-between">
@@ -112,12 +115,8 @@ export default function App() {
           {page === 'planner' && <Text>Planner (coming soon)</Text>}
           {page === 'settings' && <Text>Settings (forms TBD)</Text>}
         </main>
+        </div>
 
-        {!rightOpen && (
-          <Button variant="subtle" size="xs" onClick={() => setRightOpen(true)} style={{ width: 24, position: 'relative' }}>
-            ‹{openConflicts.length > 0 && <span style={{ color: 'red', marginLeft: 4 }}>●{openConflicts.length}</span>}
-          </Button>
-        )}
         <Drawer opened={rightOpen} onClose={() => setRightOpen(false)} title="Conflicts" position="right" size="sm">
           {openConflicts.length === 0 && <Text c="dimmed">No conflicts</Text>}
           {openConflicts.map(c => (
