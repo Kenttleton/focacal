@@ -1,58 +1,124 @@
 import { useState, useEffect } from 'react'
+import { api, getToken, setToken, clearToken } from './api'
 import './App.css'
 
-const API = '' // same origin in web; desktop can override via config
-
 export default function App() {
-  const [token, setToken] = useState(localStorage.getItem('fc_token') || '')
-  const [status, setStatus] = useState('checking')
+  const [token, setTok] = useState(getToken())
+  const [authed, setAuthed] = useState(!!getToken())
+  const [view, setView] = useState(localStorage.getItem('fc_view') || 'month')
+  const [leftOpen, setLeftOpen] = useState(true)
+  const [rightOpen, setRightOpen] = useState(false)
+  const [conflicts, setConflicts] = useState([])
+  const [events, setEvents] = useState([])
   const [user, setUser] = useState('')
   const [pass, setPass] = useState('')
-  const [mode, setMode] = useState('login') // login | setup
+  const [mode, setMode] = useState('login')
   const [msg, setMsg] = useState('')
+  const [page, setPage] = useState('calendar')
 
   useEffect(() => {
-    if (!token) { setStatus('auth'); return }
-    fetch(API + '/health', { headers: { Authorization: 'Bearer ' + token } })
-      .then(r => r.ok ? setStatus('ok') : setStatus('auth'))
-      .catch(() => setStatus('auth'))
+    if (!token) { setAuthed(false); return }
+    api('/health').then(() => setAuthed(true)).catch(() => { clearToken(); setTok(''); setAuthed(false) })
   }, [token])
+
+  useEffect(() => {
+    if (!authed) return
+    const now = new Date()
+    const from = new Date(now.getTime() - 7*86400000).toISOString()
+    const to = new Date(now.getTime() + 14*86400000).toISOString()
+    api(`/events?from=${from}&to=${to}`).then(setEvents).catch(() => {})
+    api(`/conflicts?from=${from}&to=${to}`).then(setConflicts).catch(() => {})
+  }, [authed])
 
   const submit = async (e) => {
     e.preventDefault()
     const path = mode === 'setup' ? '/auth/setup' : '/auth/login'
-    const body = mode === 'setup'
-      ? { username: user, password: pass }
-      : { username: user, password: pass }
-    const r = await fetch(API + path, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
-    const data = await r.json()
-    if (!r.ok) { setMsg(data.error || 'failed'); return }
-    if (data.token) {
-      localStorage.setItem('fc_token', data.token)
-      setToken(data.token)
-      setStatus('ok')
-    }
+    const r = await api(path, { method: 'POST', body: JSON.stringify({ username: user, password: pass }) }).catch(err => ({ error: err.message }))
+    if (r && r.error) { setMsg(r.error); return }
+    if (r && r.token) { setToken(r.token); setTok(r.token); setAuthed(true) }
   }
 
-  if (status === 'checking') return <div>Loading…</div>
-  if (status === 'ok') return <div>Authenticated. Token stored.</div>
+  if (!authed) {
+    return (
+      <div style={{ padding: 24, maxWidth: 360 }}>
+        <h2>{mode === 'setup' ? 'First-run setup' : 'Sign in'}</h2>
+        <form onSubmit={submit}>
+          <input placeholder="username" value={user} onChange={e => setUser(e.target.value)} /><br />
+          <input type="password" placeholder="password" value={pass} onChange={e => setPass(e.target.value)} /><br />
+          <button type="submit">{mode === 'setup' ? 'Create' : 'Login'}</button>
+        </form>
+        <button onClick={() => setMode(mode === 'setup' ? 'login' : 'setup')}>
+          {mode === 'setup' ? 'Have an account? Login' : 'First run? Setup'}
+        </button>
+        {msg && <p style={{ color: 'red' }}>{msg}</p>}
+      </div>
+    )
+  }
+
+  const dismiss = async (key) => {
+    await api(`/conflicts/${key}/dismiss`, { method: 'POST' })
+    setConflicts(prev => prev.map(c => c.key === key ? { ...c, dismissed: true } : c))
+  }
+
+  const changeView = (v) => { setView(v); localStorage.setItem('fc_view', v) }
 
   return (
-    <div style={{ padding: 24, maxWidth: 360 }}>
-      <h2>{mode === 'setup' ? 'First-run setup' : 'Sign in'}</h2>
-      <form onSubmit={submit}>
-        <input placeholder="username" value={user} onChange={e => setUser(e.target.value)} /><br/>
-        <input type="password" placeholder="password" value={pass} onChange={e => setPass(e.target.value)} /><br/>
-        <button type="submit">{mode === 'setup' ? 'Create' : 'Login'}</button>
-      </form>
-      <button onClick={() => setMode(mode === 'setup' ? 'login' : 'setup')}>
-        {mode === 'setup' ? 'Have an account? Login' : 'First run? Setup'}
-      </button>
-      {msg && <p style={{ color: 'red' }}>{msg}</p>}
+    <div style={{ display: 'flex', height: '100vh' }}>
+      {leftOpen && (
+        <aside style={{ width: 200, borderRight: '1px solid #ccc', padding: 12 }}>
+          <button onClick={() => setLeftOpen(false)}>‹</button>
+          <nav>
+            <div onClick={() => setPage('calendar')} style={{ cursor: 'pointer', padding: 4 }}>Calendar</div>
+            <div onClick={() => setPage('planner')} style={{ cursor: 'pointer', padding: 4 }}>Planner</div>
+            <div onClick={() => setPage('settings')} style={{ cursor: 'pointer', padding: 4 }}>Settings</div>
+          </nav>
+        </aside>
+      )}
+      {!leftOpen && <button onClick={() => setLeftOpen(true)} style={{ width: 24 }}>›</button>}
+
+      <main style={{ flex: 1, padding: 12, overflow: 'auto' }}>
+        {!leftOpen && null}
+        <div style={{ marginBottom: 8 }}>
+          {['day', 'week', 'month'].map(v => (
+            <button key={v} onClick={() => changeView(v)} style={{ fontWeight: view === v ? 'bold' : 'normal', marginRight: 4 }}>{v}</button>
+          ))}
+        </div>
+        {page === 'calendar' && (
+          <div>
+            <h3>Events ({events.length})</h3>
+            <ul>
+              {events.map(e => (
+                <li key={e.id} style={{ color: e.color || 'inherit' }}>
+                  {new Date(e.start).toLocaleString()} — {e.title}
+                  {e.conflict_keys && e.conflict_keys.length > 0 && <span style={{ color: 'orange', marginLeft: 8 }}>⚠</span>}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {page === 'planner' && <div><h3>Planner</h3><p>Coming soon.</p></div>}
+        {page === 'settings' && <div><h3>Settings</h3><p>Forms TBD.</p></div>}
+      </main>
+
+      {!rightOpen && (
+        <button onClick={() => setRightOpen(true)} style={{ width: 24, position: 'relative' }}>
+          ‹{conflicts.filter(c => !c.dismissed).length > 0 && <span style={{ color: 'red' }}>●{conflicts.filter(c => !c.dismissed).length}</span>}
+        </button>
+      )}
+      {rightOpen && (
+        <aside style={{ width: 280, borderLeft: '1px solid #ccc', padding: 12 }}>
+          <button onClick={() => setRightOpen(false)}>›</button>
+          <h4>Conflicts</h4>
+          {conflicts.filter(c => !c.dismissed).length === 0 && <p>None</p>}
+          {conflicts.filter(c => !c.dismissed).map(c => (
+            <div key={c.key} style={{ marginBottom: 8, borderBottom: '1px solid #eee', paddingBottom: 8 }}>
+              <div>{new Date(c.a.start).toLocaleString()} – {new Date(c.b.start).toLocaleString()}</div>
+              <div style={{ fontSize: 12 }}>{c.a.title} vs {c.b.title}</div>
+              <button onClick={() => dismiss(c.key)}>Dismiss</button>
+            </div>
+          ))}
+        </aside>
+      )}
     </div>
   )
 }
