@@ -44,6 +44,16 @@ func runStart(_ *cobra.Command, _ []string) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
+	// Ensure a recovery key exists for hard-reset of forgotten credentials.
+	recoveryPath := "/data/recovery.key"
+	if _, err := os.Stat(recoveryPath); os.IsNotExist(err) {
+		b := make([]byte, 16)
+		_, _ = rand.Read(b)
+		key := hex.EncodeToString(b)
+		_ = os.WriteFile(recoveryPath, []byte(key), 0600)
+		fmt.Printf("\n[focacal] Recovery key (store safely): %s\n\n", key)
+	}
+
 	// Open the SQLite store.
 	db, err := store.Open("/data/focacal.db")
 	if err != nil {

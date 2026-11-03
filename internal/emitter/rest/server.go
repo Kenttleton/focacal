@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -78,6 +79,7 @@ func New(connectors map[string]connector.Connector, health *HealthState, addr st
 	r.Post("/auth/setup", s.handleAuthSetup)
 	r.Post("/auth/login", s.handleAuthLogin)
 	r.Post("/auth/reset", s.handleAuthReset)
+	r.Post("/auth/recover", s.handleAuthRecover)
 	r.Get("/today", s.handleToday)
 	r.Get("/now", s.handleNow)
 	r.Post("/replan", s.handleReplan)
@@ -895,6 +897,50 @@ func (s *Server) handleAuthReset(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	uc.Auth.PasswordHash = h
+	tok := simple.GenerateKey()
+	th, _ := simple.HashToken(tok)
+	uc.Auth.SessionToken = th
+	path := viper.ConfigFileUsed()
+	if path != "" {
+		config.WriteSections(path, map[string]any{
+			"auth": map[string]any{
+				"enabled":       true,
+				"username":      uc.Auth.Username,
+				"password_hash": uc.Auth.PasswordHash,
+				"session_token": uc.Auth.SessionToken,
+			},
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"token": tok})
+}
+
+func (s *Server) handleAuthRecover(w http.ResponseWriter, r *http.Request) {
+	var u struct {
+		RecoveryKey string `json:"recovery_key"`
+		Username    string `json:"username"`
+		NewPassword string `json:"new_password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&u); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	data, err := os.ReadFile("/data/recovery.key")
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "no recovery key on server")
+		return
+	}
+	if strings.TrimSpace(string(data)) != u.RecoveryKey {
+		writeError(w, http.StatusUnauthorized, "invalid recovery key")
+		return
+	}
+	uc := config.UserConfigFromContext(r.Context())
+	h, err := simple.HashPassword(u.NewPassword)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	uc.Auth.Username = u.Username
 	uc.Auth.PasswordHash = h
 	tok := simple.GenerateKey()
 	th, _ := simple.HashToken(tok)

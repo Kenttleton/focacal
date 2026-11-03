@@ -33,7 +33,7 @@ func Middleware(cfg config.AuthConfig, log *slog.Logger) func(http.Handler) http
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// Allow setup/login endpoints without auth.
-			if r.URL.Path == "/auth/setup" || r.URL.Path == "/auth/login" {
+			if r.URL.Path == "/auth/setup" || r.URL.Path == "/auth/login" || r.URL.Path == "/auth/recover" {
 				next.ServeHTTP(w, r)
 				return
 			}
