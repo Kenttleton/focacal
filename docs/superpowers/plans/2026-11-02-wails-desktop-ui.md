@@ -83,6 +83,12 @@ Replace the single static API key with username/password:
 - **Web UI**: assumes its own host (relative URLs, same origin). No backend URL config needed.
 - **Desktop (Wails)**: can run in embedded mode (in-process bindings) OR remote mode (configurable backend URL + exchanged token). Remote mode lets a desktop client point at a remote focacal deployment.
 
+## Desktop notifications
+- Cross-platform notifications via a Go library (e.g. `github.com/gen2brain/beeep`) invoked from bindings.
+- Triggers: new conflicts, new meetings synced, generated events created, calendar shifts/replans.
+- Per-category enable/disable in settings.
+- Web build falls back to the Web Notification API.
+
 ## Non-goals (for now)
 - Mobile.
 - Rewriting backend.
