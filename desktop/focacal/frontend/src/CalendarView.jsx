@@ -43,21 +43,6 @@ const CalendarView = forwardRef(function CalendarView({ events, view }, ref) {
 
   return (
     <div className={isTimeGrid ? 'no-today-highlight' : ''} style={{ position: 'relative' }}>
-      {isTimeGrid && (
-        <div style={{
-          position: 'absolute',
-          left: 4,
-          top: 4,
-          background: '#e00',
-          color: '#fff',
-          fontSize: 11,
-          padding: '2px 6px',
-          borderRadius: 3,
-          zIndex: 5,
-          pointerEvents: 'none',
-          fontWeight: 'bold',
-        }}>{nowLabel}</div>
-      )}
       <FullCalendar
         ref={calRef}
         plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
