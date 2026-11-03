@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { api, getToken, setToken, clearToken } from './api'
+import CalendarView from './CalendarView'
 import './App.css'
 
 export default function App() {
@@ -85,15 +86,7 @@ export default function App() {
         </div>
         {page === 'calendar' && (
           <div>
-            <h3>Events ({events.length})</h3>
-            <ul>
-              {events.map(e => (
-                <li key={e.id} style={{ color: e.color || 'inherit' }}>
-                  {new Date(e.start).toLocaleString()} — {e.title}
-                  {e.conflict_keys && e.conflict_keys.length > 0 && <span style={{ color: 'orange', marginLeft: 8 }}>⚠</span>}
-                </li>
-              ))}
-            </ul>
+            <CalendarView events={events} view={view} />
           </div>
         )}
         {page === 'planner' && <div><h3>Planner</h3><p>Coming soon.</p></div>}

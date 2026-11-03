@@ -52,5 +52,5 @@ oauth:
 auth:
   enabled: true
   password_hash: $2a$10$VR9BZxEGpRWCUhBC/gaaFOBn11XlN534Ux74V3W2kabXA3O2nBoxe
-  session_token: $2a$10$nlHeXO5gHQIi/3QU/e60oehvB8wCUaOr8ZQTAxXzt7tsOk88IIRhO
+  session_token: $2a$10$WOyKkSvxP2njieGNjWN9ue8I816G4u6cZCHk6yiMDFR2qyJRgzGOS
   username: admin
