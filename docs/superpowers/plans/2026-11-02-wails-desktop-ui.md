@@ -69,6 +69,15 @@ func (s *UIService) SetBackend(ctx context.Context, url, apiKey string) error
 - Component library: **Mantine** (batteries-included date/calendar components: DatePicker, Calendar, TimeInput) plus **FullCalendar** (or react-big-calendar) for the week view; Tailwind optional.
 - Web and desktop coexist; same frontend, two shells.
 
+## Auth redesign (traditional)
+Replace the single static API key with username/password:
+- Server stores a hashed password (bcrypt) in config or a small auth table.
+- `POST /auth/login` with username+password returns a session token (API key exchange).
+- First-run setup: if no password set, UI prompts to create one; server accepts `POST /auth/setup` once.
+- `POST /auth/reset` (authenticated) to change password; rotates token.
+- Desktop/web store the exchanged token, not the raw password.
+- Keep backward compat: if `auth.api_key` is set and no password, accept it (migration).
+
 ## Desktop-specific: remote backend support
 - Desktop app settings: configurable backend URL (default http://localhost:5233) + API key.
 - When backend URL is set and reachable, desktop uses REST API (like web build) instead of in-process bindings.
