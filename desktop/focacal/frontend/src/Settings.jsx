@@ -18,16 +18,22 @@ export default function Settings({ onSaved }) {
   const openAdd = (type) => { setDrawerType(type); setForm({}); setDrawerOpen(true) }
   const openEdit = (type, item) => { setDrawerType(type); setForm({ ...item }); setDrawerOpen(true) }
 
+  const genId = () => (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : Math.random().toString(36).slice(2)
   const saveSource = async () => {
-    const exists = sources.find(s => s.id === form.id)
-    const list = exists ? sources.map(s => s.id === form.id ? form : s) : [...sources, form]
+    const f = { ...form }
+    if (!f.id) f.id = genId()
+    const exists = sources.find(s => s.id === f.id)
+    const list = exists ? sources.map(s => s.id === f.id ? f : s) : [...sources, f]
     await api('/config/sources', { method: 'PUT', body: JSON.stringify(list) })
     setDrawerOpen(false); load()
   }
   const saveDest = async () => {
+    const f = { ...form }
+    if (!f.id) f.id = genId()
+    if (!f.calendar_id) f.calendar_id = 'primary'
     const key = d => d.id + '|' + d.calendar_id
-    const exists = dests.find(d => key(d) === key(form))
-    const list = exists ? dests.map(d => key(d) === key(form) ? form : d) : [...dests, form]
+    const exists = dests.find(d => key(d) === key(f))
+    const list = exists ? dests.map(d => key(d) === key(f) ? f : d) : [...dests, f]
     await api('/config/destinations', { method: 'PUT', body: JSON.stringify(list) })
     setDrawerOpen(false); load()
   }
@@ -46,7 +52,7 @@ export default function Settings({ onSaved }) {
       <Title order={4}>Sources</Title>
       <Text size="sm" c="dimmed">{(sources || []).length} configured</Text>
       <Button size="xs" onClick={() => openAdd('source')}>Add source</Button>
-      <ul>{(sources || []).map(s => <li key={s.id}>{s.id} ({s.type}) <Button size="xs" variant="subtle" onClick={() => openEdit('source', s)}>Edit</Button></li>)}</ul>
+      <ul>{(sources || []).map(s => <li key={s.id}>{s.label || s.id} ({s.type}) <Button size="xs" variant="subtle" onClick={() => openEdit('source', s)}>Edit</Button></li>)}</ul>
       <Button size="xs" variant="light" onClick={() => window.open('/calendar.ics', '_blank')}>Export ICS</Button>
 
       <Divider />
