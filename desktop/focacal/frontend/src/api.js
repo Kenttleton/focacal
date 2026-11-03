@@ -22,3 +22,8 @@ export async function api(path, opts = {}) {
   if (res.status === 204) return null
   return res.json()
 }
+
+// /events and /blocks only accept YYYY-MM-DD; anything else silently falls
+// back to a -1/+8 day window on the server.
+const pad = n => String(n).padStart(2, '0')
+export const ymd = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`

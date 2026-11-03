@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react'
-import { Stack, TextInput, Select, Switch, Button, Text, Group, Title, Divider, Drawer } from '@mantine/core'
+import { Stack, TextInput, Select, Switch, Button, Text, Group, Title, Divider, Drawer, useMantineColorScheme } from '@mantine/core'
 import { api } from './api'
 
-export default function Settings({ onSaved }) {
+export default function Settings({ prefs, onPrefs }) {
+  const { colorScheme, setColorScheme } = useMantineColorScheme()
   const [sources, setSources] = useState([])
   const [dests, setDests] = useState([])
   const [drawerOpen, setDrawerOpen] = useState(false)
@@ -43,10 +44,13 @@ export default function Settings({ onSaved }) {
       <Title order={3}>Settings</Title>
 
       <Title order={4}>General</Title>
-      <Select label="Default view" data={['day','week','month']} defaultValue="month" />
-      <Select label="Start of week" data={['Sunday','Monday']} defaultValue="Sunday" />
+      <Select label="Default view" data={[{ value: 'day', label: 'Day' }, { value: 'week', label: 'Week' }, { value: 'month', label: 'Month' }]}
+        value={prefs.view} onChange={v => v && onPrefs({ ...prefs, view: v })} allowDeselect={false} />
+      <Select label="Start of week" data={[{ value: '0', label: 'Sunday' }, { value: '1', label: 'Monday' }]}
+        value={String(prefs.firstDay)} onChange={v => v && onPrefs({ ...prefs, firstDay: Number(v) })} allowDeselect={false} />
       <Select label="Polling interval (min)" data={['1','5','10','15','30','60']} defaultValue="10" />
-      <Select label="Theme" data={['light','dark','system']} defaultValue="system" />
+      <Select label="Theme" data={[{ value: 'auto', label: 'System' }, { value: 'light', label: 'Light' }, { value: 'dark', label: 'Dark' }]}
+        value={colorScheme} onChange={v => v && setColorScheme(v)} allowDeselect={false} />
 
       <Divider />
       <Title order={4}>Sources</Title>

@@ -1,0 +1,205 @@
+/* Calendar grid styling: Apple Calendar's quiet hairlines, red "today" marker
+   and tinted events with a left accent bar, plus Outlook's weekend shading and
+   chip-style month events. Colors are tokens so light/dark stay in one place. */
+
+:root {
+  --cal-bg: #ffffff;
+  --cal-line: rgba(60, 60, 67, 0.14);
+  --cal-text: #1d1d1f;
+  --cal-dim: rgba(60, 60, 67, 0.6);
+  --cal-faint: rgba(60, 60, 67, 0.3);
+  --cal-weekend: rgba(60, 60, 67, 0.035);
+  --cal-today: #ff3b30;
+  --cal-today-col: rgba(10, 132, 255, 0.04);
+  --cal-sidebar: #f5f5f7;
+  --cal-sidebar-hover: rgba(60, 60, 67, 0.08);
+  --cal-sidebar-active: rgba(10, 132, 255, 0.14);
+  --cal-accent: #0a84ff;
+}
+
+:root[data-mantine-color-scheme='dark'] {
+  --cal-bg: #1e1e1e;
+  --cal-line: rgba(235, 235, 245, 0.12);
+  --cal-text: #f5f5f7;
+  --cal-dim: rgba(235, 235, 245, 0.6);
+  --cal-faint: rgba(235, 235, 245, 0.3);
+  --cal-weekend: rgba(255, 255, 255, 0.025);
+  --cal-today: #ff453a;
+  --cal-today-col: rgba(10, 132, 255, 0.07);
+  --cal-sidebar: #262628;
+  --cal-sidebar-hover: rgba(255, 255, 255, 0.07);
+  --cal-sidebar-active: rgba(10, 132, 255, 0.28);
+}
+
+.cal-wrap {
+  flex: 1;
+  min-height: 0;
+  background: var(--cal-bg);
+}
+
+.cal-wrap .fc {
+  --fc-border-color: var(--cal-line);
+  --fc-page-bg-color: var(--cal-bg);
+  --fc-neutral-bg-color: var(--cal-weekend);
+  --fc-today-bg-color: transparent;
+  --fc-now-indicator-color: var(--cal-today);
+  height: 100%;
+  font-size: 12px;
+  color: var(--cal-text);
+}
+
+/* Outer frame off; only inner hairlines remain. */
+.cal-wrap .fc-theme-standard .fc-scrollgrid { border: 0; }
+.cal-wrap .fc-theme-standard td,
+.cal-wrap .fc-theme-standard th { border-color: var(--cal-line); }
+
+/* Weekend shading (Outlook). */
+.cal-wrap .fc-day-sat,
+.cal-wrap .fc-day-sun { background: var(--cal-weekend); }
+
+/* ── Column headers ───────────────────────────────────────────────────── */
+.cal-wrap .fc-col-header-cell { border-left: 0; border-right: 0; background: var(--cal-bg); }
+.cal-wrap .fc-col-header-cell-cushion { padding: 6px 4px 8px; text-decoration: none; color: inherit; }
+
+.dh { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.dh.dh-month { flex-direction: row; justify-content: flex-start; padding: 0 6px; }
+.dh-wd { font-size: 11px; font-weight: 500; color: var(--cal-dim); }
+.dh-today .dh-wd { color: var(--cal-today); }
+
+.dn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 4px;
+  border-radius: 12px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--cal-text);
+  font-variant-numeric: tabular-nums;
+}
+.dn-lg { font-size: 20px; font-weight: 400; min-width: 34px; height: 34px; border-radius: 17px; }
+.dn-today { background: var(--cal-today); color: #fff; font-weight: 600; }
+.cal-wrap .fc-day-other .dn { color: var(--cal-faint); }
+
+/* ── Month grid ───────────────────────────────────────────────────────── */
+.cal-wrap .fc-daygrid-day-top { flex-direction: row; padding: 4px 4px 0; }
+.cal-wrap .fc-daygrid-day-number { padding: 0; text-decoration: none; }
+.cal-wrap .fc-daygrid-day-events { padding-bottom: 2px; }
+.cal-wrap .fc-daygrid-more-link { font-size: 11px; color: var(--cal-dim); margin-left: 6px; }
+.cal-wrap .fc-daygrid-event-harness { margin-top: 1px; }
+
+/* ── Time grid ────────────────────────────────────────────────────────── */
+.cal-wrap .fc-timegrid-slot { height: 28px; border-color: var(--cal-line); }
+.cal-wrap .fc-timegrid-slot-minor { border-top-style: none; }
+.cal-wrap .fc-timegrid-slot-label { vertical-align: top; border-color: transparent; }
+.cal-wrap .fc-timegrid-slot-label-cushion {
+  position: relative;
+  top: -0.65em;
+  padding: 0 8px 0 4px;
+  font-size: 11px;
+  color: var(--cal-dim);
+  font-variant-numeric: tabular-nums;
+}
+.cal-wrap .fc-timegrid-axis-cushion { font-size: 11px; color: var(--cal-dim); }
+.cal-wrap .fc-timegrid-col.fc-day-today { background: var(--cal-today-col); }
+.cal-wrap .fc-timegrid-col-events { margin: 0 4px 0 1px; }
+
+/* Now indicator: red hairline with a dot at the left edge. */
+.cal-wrap .fc-timegrid-now-indicator-line { border-width: 1px 0 0; z-index: 4; }
+.cal-wrap .fc-timegrid-now-indicator-arrow {
+  margin-top: -4px;
+  width: 9px;
+  height: 9px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--cal-today);
+  left: -1px;
+}
+
+/* ── Events ───────────────────────────────────────────────────────────── */
+.cal-wrap .fc .fc-event {
+  --ev: #0a84ff;
+  background: color-mix(in srgb, var(--ev) 16%, var(--cal-bg));
+  border: 0;
+  border-left: 3px solid var(--ev);
+  border-radius: 5px;
+  color: color-mix(in srgb, var(--ev) 62%, var(--cal-text));
+  box-shadow: none;
+  cursor: pointer;
+}
+.cal-wrap .fc .fc-event:hover { background: color-mix(in srgb, var(--ev) 24%, var(--cal-bg)); }
+.cal-wrap .fc .fc-event.fc-event-selected,
+.cal-wrap .fc .fc-event:focus-visible { outline: 2px solid var(--ev); outline-offset: 1px; }
+.cal-wrap .fc .fc-event-main { color: inherit; padding: 0; }
+
+/* Focacal-generated blocks get a faint diagonal hatch so they read as planned
+   time rather than meetings. */
+.cal-wrap .fc .fc-event.ev-generated {
+  background:
+    repeating-linear-gradient(135deg, transparent 0 6px, color-mix(in srgb, var(--ev) 10%, transparent) 6px 12px),
+    color-mix(in srgb, var(--ev) 14%, var(--cal-bg));
+}
+
+.ev { display: flex; flex-direction: column; gap: 1px; padding: 2px 6px; overflow: hidden; line-height: 1.25; }
+.ev-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ev-time { font-size: 11px; opacity: 0.8; white-space: nowrap; }
+.ev-row { display: flex; align-items: center; gap: 4px; }
+.ev-flag { display: inline-flex; flex: none; color: #ff9f0a; }
+
+/* Month chips are single-line: time then title. */
+.fc-daygrid-event .ev { flex-direction: row; align-items: center; gap: 5px; padding: 1px 6px; }
+.fc-daygrid-event .ev-time { opacity: 0.75; }
+.fc-daygrid-event .ev-title { font-weight: 500; }
+
+/* ── Sidebar ──────────────────────────────────────────────────────────── */
+.sb { background: var(--cal-sidebar); border-right: 1px solid var(--cal-line); }
+.sb-section { padding: 0 10px 12px; }
+.sb-label { padding: 6px 8px 4px; font-size: 11px; font-weight: 600; color: var(--cal-dim); }
+.sb-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--cal-text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.sb-item:hover { background: var(--cal-sidebar-hover); }
+.sb-item[aria-current='page'] { background: var(--cal-sidebar-active); font-weight: 600; }
+.sb-item:focus-visible { outline: 2px solid var(--cal-accent); outline-offset: -2px; }
+.sb-dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+
+.cf-card {
+  padding: 8px 10px;
+  margin: 0 0 6px;
+  border-radius: 8px;
+  background: var(--cal-bg);
+  border: 1px solid var(--cal-line);
+  border-left: 3px solid #ff9f0a;
+}
+.cf-card.cf-tentative { border-left-color: var(--cal-faint); }
+
+/* ── Toolbar ──────────────────────────────────────────────────────────── */
+.tb { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--cal-line); background: var(--cal-bg); }
+.tb-callout { flex: 1; display: flex; align-items: center; justify-content: center; gap: 4px; font-weight: 600; font-size: 14px; min-width: 0; flex-wrap: wrap; }
+.tz-link {
+  all: unset;
+  cursor: pointer;
+  padding: 1px 6px;
+  border-radius: 6px;
+  border-bottom: 1px dashed var(--cal-faint);
+}
+.tz-link:hover, .tz-link:focus-visible { background: var(--cal-sidebar-hover); border-bottom-color: transparent; }
+.tz-link:focus-visible { outline: 2px solid var(--cal-accent); }
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
+}
