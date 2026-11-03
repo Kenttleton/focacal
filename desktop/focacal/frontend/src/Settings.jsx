@@ -73,7 +73,7 @@ export default function Settings({ onSaved }) {
         <Stack>
           {drawerType === 'source' && (
             <>
-              <TextInput label="ID (auto)" placeholder="generated" disabled />
+              <TextInput label="ID (auto)" value={form.id || '(generated on save)'} disabled />
               <TextInput label="Label" value={form.label || ''} onChange={e => setForm({ ...form, label: e.target.value })} />
               <Select label="Type" data={['google','outlook','caldav','ics']} value={form.type} onChange={v => setForm({ ...form, type: v })} />
               <Button onClick={saveSource}>Save</Button>
