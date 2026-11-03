@@ -46,11 +46,9 @@ func Middleware(cfg config.AuthConfig, log *slog.Logger) func(http.Handler) http
 				next.ServeHTTP(w, r)
 				return
 			}
-			if cfg.SessionToken != "" {
-				if err := bcrypt.CompareHashAndPassword([]byte(cfg.SessionToken), []byte(candidate)); err == nil {
-					next.ServeHTTP(w, r)
-					return
-				}
+			if IsValidToken(candidate) {
+				next.ServeHTTP(w, r)
+				return
 			}
 			if cfg.APIKey != "" && constantTimeEqual(candidate, cfg.APIKey) {
 				next.ServeHTTP(w, r)
@@ -105,6 +103,15 @@ func HashPassword(pw string) (string, error) {
 func VerifyPassword(hash, pw string) bool {
 	return bcrypt.CompareHashAndPassword([]byte(hash), []byte(pw)) == nil
 }
+
+// in-memory token registry (survives for process lifetime)
+var validTokens = make(map[string]bool)
+
+// StoreToken registers a newly issued token.
+func StoreToken(tok string) { validTokens[tok] = true }
+
+// IsValidToken reports whether tok was issued this process.
+func IsValidToken(tok string) bool { return validTokens[tok] }
 
 // HashToken hashes a session token with bcrypt.
 func HashToken(tok string) (string, error) {

@@ -849,6 +849,7 @@ func (s *Server) handleAuthSetup(w http.ResponseWriter, r *http.Request) {
 			},
 		})
 	}
+	simple.StoreToken(tok)
 	writeJSON(w, http.StatusOK, map[string]string{"token": tok})
 }
 
@@ -880,6 +881,7 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 			},
 		})
 	}
+	simple.StoreToken(tok)
 	writeJSON(w, http.StatusOK, map[string]string{"token": tok})
 }
 
@@ -912,6 +914,7 @@ func (s *Server) handleAuthReset(w http.ResponseWriter, r *http.Request) {
 			},
 		})
 	}
+	simple.StoreToken(tok)
 	writeJSON(w, http.StatusOK, map[string]string{"token": tok})
 }
 
@@ -956,6 +959,7 @@ func (s *Server) handleAuthRecover(w http.ResponseWriter, r *http.Request) {
 			},
 		})
 	}
+	simple.StoreToken(tok)
 	writeJSON(w, http.StatusOK, map[string]string{"token": tok})
 }
 
