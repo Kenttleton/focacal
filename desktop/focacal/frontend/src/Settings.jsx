@@ -15,10 +15,10 @@ export default function Settings({ onSaved }) {
   }
   useEffect(() => { load() }, [])
 
-  const openAdd = (type) => { setDrawerType(type); setForm({}); setDrawerOpen(true) }
+  const genId = () => (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : Math.random().toString(36).slice(2)
+  const openAdd = (type) => { setDrawerType(type); setForm({ id: genId() }); setDrawerOpen(true) }
   const openEdit = (type, item) => { setDrawerType(type); setForm({ ...item }); setDrawerOpen(true) }
 
-  const genId = () => (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : Math.random().toString(36).slice(2)
   const saveSource = async () => {
     const f = { ...form }
     if (!f.id) f.id = genId()
@@ -73,7 +73,7 @@ export default function Settings({ onSaved }) {
         <Stack>
           {drawerType === 'source' && (
             <>
-              <TextInput label="ID (auto)" value={form.id || '(generated on save)'} disabled />
+              <TextInput label="ID (auto)" value={form.id || ''} disabled />
               <TextInput label="Label" value={form.label || ''} onChange={e => setForm({ ...form, label: e.target.value })} />
               <Select label="Type" data={['google','outlook','caldav','ics']} value={form.type} onChange={v => setForm({ ...form, type: v })} />
               <Button onClick={saveSource}>Save</Button>
