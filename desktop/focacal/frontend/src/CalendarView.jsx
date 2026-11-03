@@ -1,4 +1,4 @@
-import { forwardRef, useImperativeHandle, useRef, useEffect } from 'react'
+import { forwardRef, useImperativeHandle, useRef, useEffect, useState } from 'react'
 import FullCalendar from '@fullcalendar/react'
 import dayGridPlugin from '@fullcalendar/daygrid'
 import timeGridPlugin from '@fullcalendar/timegrid'
@@ -7,17 +7,30 @@ import interactionPlugin from '@fullcalendar/interaction'
 const CalendarView = forwardRef(function CalendarView({ events, view }, ref) {
   const calRef = useRef(null)
   const fcView = view === 'day' ? 'timeGridDay' : view === 'week' ? 'timeGridWeek' : 'dayGridMonth'
+  const [nowLabel, setNowLabel] = useState('')
+  const [nowTop, setNowTop] = useState(null)
 
   useEffect(() => {
     const api = calRef.current?.getApi()
     if (api) api.changeView(fcView)
   }, [view])
 
+  useEffect(() => {
+    const update = () => {
+      const d = new Date()
+      setNowLabel(d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }))
+      const el = document.querySelector('.fc-now-indicator')
+      if (el) setNowTop(el.getBoundingClientRect().top - document.querySelector('.fc-timegrid-body')?.getBoundingClientRect().top)
+    }
+    update()
+    const id = setInterval(update, 30000)
+    return () => clearInterval(id)
+  }, [view])
+
   useImperativeHandle(ref, () => ({
     prev: () => calRef.current?.getApi().prev(),
     next: () => calRef.current?.getApi().next(),
     today: () => calRef.current?.getApi().today(),
-    getTitle: () => calRef.current?.getApi().view.title,
   }))
 
   const fcEvents = events.map(e => ({
@@ -30,8 +43,24 @@ const CalendarView = forwardRef(function CalendarView({ events, view }, ref) {
   }))
 
   const isTimeGrid = view === 'day' || view === 'week'
+
   return (
-    <div className={isTimeGrid ? 'no-today-highlight' : ''}>
+    <div className={isTimeGrid ? 'no-today-highlight' : ''} style={{ position: 'relative' }}>
+      {isTimeGrid && nowTop !== null && (
+        <div style={{
+          position: 'absolute',
+          left: 0,
+          top: nowTop,
+          transform: 'translateY(-50%)',
+          background: '#e00',
+          color: '#fff',
+          fontSize: 11,
+          padding: '1px 4px',
+          borderRadius: 3,
+          zIndex: 5,
+          pointerEvents: 'none',
+        }}>{nowLabel}</div>
+      )}
       <FullCalendar
         ref={calRef}
         plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
@@ -39,7 +68,6 @@ const CalendarView = forwardRef(function CalendarView({ events, view }, ref) {
         headerToolbar={false}
         dayHeaderFormat={{ weekday: 'long' }}
         nowIndicator={true}
-        slotLabelFormat={{ hour: 'numeric', minute: '2-digit', meridiem: 'short' }}
         events={fcEvents}
         height="auto"
         dayHeaderClassNames="fc-dayheader-custom"
@@ -49,3 +77,4 @@ const CalendarView = forwardRef(function CalendarView({ events, view }, ref) {
 })
 
 export default CalendarView
+EOF
