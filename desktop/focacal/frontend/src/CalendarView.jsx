@@ -8,7 +8,6 @@ const CalendarView = forwardRef(function CalendarView({ events, view }, ref) {
   const calRef = useRef(null)
   const fcView = view === 'day' ? 'timeGridDay' : view === 'week' ? 'timeGridWeek' : 'dayGridMonth'
   const [nowLabel, setNowLabel] = useState('')
-  const [nowTop, setNowTop] = useState(null)
 
   useEffect(() => {
     const api = calRef.current?.getApi()
@@ -19,8 +18,6 @@ const CalendarView = forwardRef(function CalendarView({ events, view }, ref) {
     const update = () => {
       const d = new Date()
       setNowLabel(d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }))
-      const el = document.querySelector('.fc-now-indicator')
-      if (el) setNowTop(el.getBoundingClientRect().top - document.querySelector('.fc-timegrid-body')?.getBoundingClientRect().top)
     }
     update()
     const id = setInterval(update, 30000)
@@ -46,19 +43,19 @@ const CalendarView = forwardRef(function CalendarView({ events, view }, ref) {
 
   return (
     <div className={isTimeGrid ? 'no-today-highlight' : ''} style={{ position: 'relative' }}>
-      {isTimeGrid && nowTop !== null && (
+      {isTimeGrid && (
         <div style={{
           position: 'absolute',
-          left: 0,
-          top: nowTop,
-          transform: 'translateY(-50%)',
+          left: 4,
+          top: 4,
           background: '#e00',
           color: '#fff',
           fontSize: 11,
-          padding: '1px 4px',
+          padding: '2px 6px',
           borderRadius: 3,
           zIndex: 5,
           pointerEvents: 'none',
+          fontWeight: 'bold',
         }}>{nowLabel}</div>
       )}
       <FullCalendar
