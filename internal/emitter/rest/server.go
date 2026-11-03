@@ -268,6 +268,7 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 			"end":      uc.WorkingHours.End,
 			"timezone": uc.WorkingHours.Timezone,
 		},
+		"display_timezone": uc.DisplayTimezone,
 		"lunch": map[string]any{
 			"preferred":        uc.Lunch.Preferred,
 			"window_start":     uc.Lunch.WindowStart,
@@ -292,7 +293,10 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 			End      string `json:"end"`
 			Timezone string `json:"timezone"`
 		} `json:"working_hours"`
-		Lunch *struct {
+		// DisplayTimezone is a pointer so an explicit "" (reset to detect) can
+		// be told apart from "not provided".
+		DisplayTimezone *string `json:"display_timezone"`
+		Lunch           *struct {
 			Preferred       string `json:"preferred"`
 			WindowStart     string `json:"window_start"`
 			WindowEnd       string `json:"window_end"`
@@ -325,6 +329,17 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 			viper.Set("working_hours.timezone", wh.Timezone)
 			uc.WorkingHours.Timezone = wh.Timezone
 		}
+	}
+	if u.DisplayTimezone != nil {
+		tz := *u.DisplayTimezone
+		if tz != "" {
+			if _, err := time.LoadLocation(tz); err != nil {
+				writeError(w, http.StatusBadRequest, "unknown timezone: "+tz)
+				return
+			}
+		}
+		viper.Set("display_timezone", tz)
+		uc.DisplayTimezone = tz
 	}
 	if l := u.Lunch; l != nil {
 		if l.Preferred != "" {
@@ -368,25 +383,34 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "no config file in use")
 		return
 	}
-	// Build a partial config map for WriteSections (only top-level sections owned).
-	sections := map[string]any{
-		"working_hours": map[string]any{
+	// Write only the sections this request touched: WriteSections re-encodes each
+	// one, which drops its inline comments, so untouched sections are left alone.
+	sections := map[string]any{}
+	if u.WorkingHours != nil {
+		sections["working_hours"] = map[string]any{
 			"start":    uc.WorkingHours.Start,
 			"end":      uc.WorkingHours.End,
 			"timezone": uc.WorkingHours.Timezone,
-		},
-		"lunch": map[string]any{
+		}
+	}
+	if u.DisplayTimezone != nil {
+		sections["display_timezone"] = uc.DisplayTimezone
+	}
+	if u.Lunch != nil {
+		sections["lunch"] = map[string]any{
 			"preferred":        uc.Lunch.Preferred,
 			"window_start":     uc.Lunch.WindowStart,
 			"window_end":       uc.Lunch.WindowEnd,
 			"duration_minutes": uc.Lunch.DurationMinutes,
-		},
-		"focus": map[string]any{
+		}
+	}
+	if u.Focus != nil {
+		sections["focus"] = map[string]any{
 			"style":                  uc.Focus.Style,
 			"min_block_minutes":      uc.Focus.MinBlockMinutes,
 			"max_block_minutes":      uc.Focus.MaxBlockMinutes,
 			"buffer_around_meetings": uc.Focus.BufferAroundMeetings,
-		},
+		}
 	}
 	if err := config.WriteSections(cfgPath, sections); err != nil {
 		s.log.Warn("write config", "err", err)

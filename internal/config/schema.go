@@ -23,6 +23,9 @@ type Config struct {
 // In the cloud these are loaded per-user from the database.
 type UserConfig struct {
 	WorkingHours WorkingHours      `mapstructure:"working_hours"`
+	// DisplayTimezone overrides the timezone clients render times in; empty
+	// means detect from the client. Planning always uses WorkingHours.Timezone.
+	DisplayTimezone string `mapstructure:"display_timezone"`
 	Lunch        LunchConfig       `mapstructure:"lunch"`
 	Focus        FocusConfig       `mapstructure:"focus"`
 	Sources      []SourceConfig    `mapstructure:"sources"`
