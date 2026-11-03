@@ -305,6 +305,36 @@ cp config.yaml /data/config.yaml
 go run . start
 ```
 
+### Desktop app (Wails)
+
+The desktop UI lives in `desktop/focacal/` and shares the React frontend with the web build.
+
+```bash
+# Install Wails CLI (once)
+go install github.com/wailsapp/wails/v2/cmd/wails@latest
+
+# Dev mode (hot reload)
+cd desktop/focacal
+wails dev
+
+# Production build
+wails build
+```
+
+#### Connecting desktop to a backend
+- **Local embedded mode** (default): desktop uses the in-process store/config (run alongside `go run . start` or standalone).
+- **Remote mode**: open Settings → Backend, set the backend URL (e.g. `https://focacal.example.com`) and API key. The desktop then talks to that deployment's REST API.
+
+### Docker deploy
+
+```bash
+cp .env.example .env   # fill in OAuth creds
+# edit config.yaml as needed
+docker compose up -d --build
+```
+
+The config.yaml mount is writable so the UI's config editors persist. Restart the container after editing sources/destinations.
+
 ### Project layout
 
 ```
