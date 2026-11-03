@@ -103,6 +103,16 @@ Replace the single static API key with username/password:
 - Mobile: unsupported (desktop/laptop only).
 - Polling interval default changed from 5 to 10 minutes.
 
+## Further decisions (settled)
+- Desktop updates: auto-update via Wails updater plugin against GitHub releases.
+- Backup/restore: config only is transferrable; calendar rebuilds via sync + planner.
+- Profiles: single profile per instance; sources/destinations carry the variety.
+- Keyboard shortcuts: global hotkeys encouraged (Wails supports); specific bindings TBD.
+- Logging: local only, no telemetry.
+- Offline: show cached events until fresh sync; buffer a few weeks forward.
+- Onboarding: first-run wizard with "I'll add this later" skip to empty state.
+- Planner page: present in nav (disabled/empty until planner phase) with form-based rule editor.
+
 ## Non-goals (for now)
 - Mobile.
 - Rewriting backend.
