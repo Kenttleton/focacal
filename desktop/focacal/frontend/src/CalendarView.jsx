@@ -29,17 +29,21 @@ const CalendarView = forwardRef(function CalendarView({ events, view }, ref) {
     classNames: (e.conflict_keys && e.conflict_keys.length) ? ['conflict'] : [],
   }))
 
+  const isTimeGrid = view === 'day' || view === 'week'
   return (
-    <FullCalendar
-      ref={calRef}
-      plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
-      initialView={fcView}
-      headerToolbar={false}
-      dayHeaderFormat={{ weekday: 'long' }}
-      events={fcEvents}
-      height="auto"
-      dayHeaderClassNames="fc-dayheader-custom"
-    />
+    <div className={isTimeGrid ? 'no-today-highlight' : ''}>
+      <FullCalendar
+        ref={calRef}
+        plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
+        initialView={fcView}
+        headerToolbar={false}
+        dayHeaderFormat={{ weekday: 'long' }}
+        nowIndicator={true}
+        events={fcEvents}
+        height="auto"
+        dayHeaderClassNames="fc-dayheader-custom"
+      />
+    </div>
   )
 })
 

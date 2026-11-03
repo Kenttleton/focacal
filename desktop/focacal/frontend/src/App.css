@@ -58,3 +58,4 @@
     background-color: rgba(255, 255, 255, 1);
 }
 .fc-dayheader-custom { color: #1a73e8 !important; font-weight: 600; }
+.no-today-highlight .fc-day-today { background: transparent !important; }
