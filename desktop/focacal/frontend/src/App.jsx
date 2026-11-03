@@ -50,7 +50,7 @@ export default function App() {
 
   if (!authed) {
     return (
-      <MantineProvider>
+      <MantineProvider defaultColorScheme="dark">
         <div style={{ padding: 24, maxWidth: 360 }}>
           <Text size="xl" fw={700} mb="md">{mode === 'setup' ? 'First-run setup' : 'Sign in'}</Text>
           <form onSubmit={submit}>
@@ -72,7 +72,7 @@ export default function App() {
   const openConflicts = conflicts.filter(c => !c.dismissed)
 
   return (
-    <MantineProvider>
+    <MantineProvider defaultColorScheme="dark">
       <div style={{ display: 'flex', height: '100vh' }}>
         {leftOpen ? (
           <aside style={{ width: 200, borderRight: '1px solid #eee', padding: 12 }}>
