@@ -22,4 +22,3 @@ export async function api(path, opts = {}) {
   if (res.status === 204) return null
   return res.json()
 }
-EOF
