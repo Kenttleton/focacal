@@ -59,7 +59,8 @@ func (s *UIService) SetBackend(ctx context.Context, url, apiKey string) error
 2. Add Go bindings: `GetEvents`, `GetConflicts`, `DismissConflict`, `GetSources`, `GetDestinations`, `PutSources`, `PutDestinations`, `GetConfig`, `UpdateConfig`.
 3. Build calendar view component using event.color, conflict markers, side-by-side overlaps.
 4. Conflicts panel with dismiss.
-5. Settings tab: sources/destinations editors (JSON textarea first, guided form later).
+5. Settings: guided form editors for sources/destinations (no JSON textarea). Forms per field with API validation messages.
+6. Layout: calendar view is the main route (when authenticated). Left: collapsible navigation drawer. Right: collapsible conflicts drawer.
 6. Keep `rest/ui.html` for headless/web fallback or remove after parity.
 7. Build pipeline: `wails build` for macOS/Windows/Linux; CI artifacts.
 8. Docs: README update, compose unchanged (REST still serves web).
