@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { MantineProvider, Button, Select, Drawer, Text, Group, Stack } from '@mantine/core'
 import { api, getToken, setToken, clearToken } from './api'
 import CalendarView from './CalendarView'
+import Settings from './Settings'
 import './App.css'
 
 export default function App() {
@@ -113,7 +114,7 @@ export default function App() {
             </>
           )}
           {page === 'planner' && <Text>Planner (coming soon)</Text>}
-          {page === 'settings' && <Text>Settings (forms TBD)</Text>}
+          {page === 'settings' && <Settings />}
         </main>
         </div>
 
