@@ -1,10 +1,10 @@
-import { useRef, useEffect } from 'react'
+import { forwardRef, useImperativeHandle, useRef, useEffect } from 'react'
 import FullCalendar from '@fullcalendar/react'
 import dayGridPlugin from '@fullcalendar/daygrid'
 import timeGridPlugin from '@fullcalendar/timegrid'
 import interactionPlugin from '@fullcalendar/interaction'
 
-export default function CalendarView({ events, view }) {
+const CalendarView = forwardRef(function CalendarView({ events, view }, ref) {
   const calRef = useRef(null)
   const fcView = view === 'day' ? 'timeGridDay' : view === 'week' ? 'timeGridWeek' : 'dayGridMonth'
 
@@ -12,6 +12,13 @@ export default function CalendarView({ events, view }) {
     const api = calRef.current?.getApi()
     if (api) api.changeView(fcView)
   }, [view])
+
+  useImperativeHandle(ref, () => ({
+    prev: () => calRef.current?.getApi().prev(),
+    next: () => calRef.current?.getApi().next(),
+    today: () => calRef.current?.getApi().today(),
+    getTitle: () => calRef.current?.getApi().view.title,
+  }))
 
   const fcEvents = events.map(e => ({
     id: e.id,
@@ -34,4 +41,7 @@ export default function CalendarView({ events, view }) {
       dayHeaderClassNames="fc-dayheader-custom"
     />
   )
-}
+})
+
+export default CalendarView
+EOF

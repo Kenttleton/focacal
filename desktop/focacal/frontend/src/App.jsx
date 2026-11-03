@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { api, getToken, setToken, clearToken } from './api'
 import CalendarView from './CalendarView'
 import './App.css'
@@ -16,6 +16,7 @@ export default function App() {
   const [mode, setMode] = useState('login')
   const [msg, setMsg] = useState('')
   const [page, setPage] = useState('calendar')
+  const calRef = useRef(null)
 
   useEffect(() => {
     if (!token) { setAuthed(false); return }
@@ -79,14 +80,19 @@ export default function App() {
 
       <main style={{ flex: 1, padding: 12, overflow: 'auto' }}>
         {!leftOpen && null}
-        <div style={{ marginBottom: 8 }}>
-          {['day', 'week', 'month'].map(v => (
-            <button key={v} onClick={() => changeView(v)} style={{ fontWeight: view === v ? 'bold' : 'normal', marginRight: 4 }}>{v}</button>
-          ))}
+        <div style={{ marginBottom: 8, display: 'flex', gap: 8, alignItems: 'center' }}>
+          <button onClick={() => calRef.current?.prev()}>‹</button>
+          <button onClick={() => calRef.current?.today()}>Today</button>
+          <button onClick={() => calRef.current?.next()}>›</button>
+          <select value={view} onChange={e => changeView(e.target.value)}>
+            <option value="day">Day</option>
+            <option value="week">Week</option>
+            <option value="month">Month</option>
+          </select>
         </div>
         {page === 'calendar' && (
           <div>
-            <CalendarView events={events} view={view} />
+            <CalendarView ref={calRef} events={events} view={view} />
           </div>
         )}
         {page === 'planner' && <div><h3>Planner</h3><p>Coming soon.</p></div>}
