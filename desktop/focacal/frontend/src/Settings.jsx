@@ -33,7 +33,7 @@ export default function Settings({ onSaved }) {
   }
 
   return (
-    <Stack>
+    <Stack style={{ maxWidth: 640, margin: '0 auto' }}>
       <Title order={3}>Settings</Title>
 
       <Title order={4}>General</Title>
