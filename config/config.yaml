@@ -8,7 +8,8 @@
 # docker-compose.yml mounts it at /data/config. See docs/config-domains.md.
 #
 # Secrets (OAuth client secrets, agent api_key, ICS feed URLs) belong in .env,
-# not here. Every value below is overridable with FOCACAL_<SECTION>_<KEY>.
+# not here; docker-compose.yml passes .env into the container. Every value
+# below is overridable with FOCACAL_<SECTION>_<KEY>.
 
 # Internal server ports — these are container-internal ports.
 # To change the HOST port, set CALDAV_PORT / REST_PORT / MCP_PORT in .env.

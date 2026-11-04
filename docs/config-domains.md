@@ -66,6 +66,14 @@ Secrets never go into the domain files through the API:
   or a `credentials_file` reference.
 - ICS feed URLs: `ics_url_env: FOCACAL_<NAME>` with the URL in `.env`. An
   inline `ics_url` or CalDAV `password` written by hand still works.
+  docker-compose.yml passes `.env` into the container (`env_file`, optional).
+  If the variable is not set, focacal still starts: it logs a warning naming
+  the source and the variable (never a value), and only that calendar fails
+  to sync, with an error naming the variable, until you set it and restart.
+  An ics source with neither `ics_url_env` nor `ics_url` is invalid. Pick
+  names that are not config overrides (`FOCACAL_ICS_<NAME>` is safe).
+- CalDAV URLs must not embed credentials (`https://user:pw@host`). The API
+  rejects them and never returns that part; set `username` instead.
 - Agent API key: `FOCACAL_AGENT_API_KEY` in `.env`.
 
 A relative `credentials_file` or `token_file` resolves under the config
@@ -171,6 +179,9 @@ rebuilt as above.
 
 Before this layout, the repository tracked a root `config.yaml` with a real
 bcrypt `password_hash` and `session_token`. The file is gone from the tree,
-but older commits still contain the hash. **Change that password before the
-repository is open-sourced**, or rewrite history to remove it. A bcrypt hash
-can be attacked offline.
+but that hash is public: it is in earlier commits that are already pushed,
+and a bcrypt hash can be attacked offline. Migrating a legacy `config.yaml`
+copies that hash into `credentials.yaml`, so **rotate the login right after
+migrating**: `POST /auth/reset` with a new password (signed in), or delete
+`config/credentials.yaml` and run `/auth/setup` again. Do not reuse that
+password anywhere.

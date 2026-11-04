@@ -85,5 +85,11 @@ func loadConfig(log *slog.Logger) (dir string, started, running *config.Config, 
 	if err != nil {
 		return "", nil, nil, fmt.Errorf("load config from %s: %w", dir, err)
 	}
+	// R14: an unset ics_url_env is a warning; only that calendar fails (at
+	// sync time). The value is never logged, only the variable name.
+	for _, ref := range running.UnresolvedEnvRefs() {
+		log.Warn("ics_url_env is not set; this calendar will not sync until it is (add it to .env and restart)",
+			"kind", ref.Kind, "id", ref.ID, "env", ref.Env)
+	}
 	return dir, started, running, nil
 }

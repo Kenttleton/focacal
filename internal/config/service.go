@@ -62,8 +62,11 @@ type Service struct {
 }
 
 // NewService returns a Service over dir. Missing domain files are treated as
-// empty. started is the config the process is running with; it is used for
-// pending_restart and is never modified. A nil started disables the flag.
+// empty. started must be the env-free snapshot LoadStart returns as started
+// (file values over defaults, no environment overrides), not the running
+// config: Service compares it with the env-free files for pending_restart, so
+// env-overridden values would otherwise read as pending forever. It is never
+// modified. A nil started disables the flag.
 func NewService(dir string, started *Config) (*Service, error) {
 	st, err := os.Stat(dir)
 	if err != nil {
@@ -359,7 +362,35 @@ func jsonObject(v any) (map[string]any, error) {
 // a credentials_file (OAuth client credentials). token_file is runtime state
 // and does not count.
 func hasSecret(s SourceConfig) bool {
-	return s.Password != "" || s.ICSURL != "" || s.ICSURLEnv != "" || s.CredentialsFile != ""
+	_, userinfo := stripUserinfo(s.CalDAVURL)
+	return s.Password != "" || s.ICSURL != "" || s.ICSURLEnv != "" || s.CredentialsFile != "" || userinfo
+}
+
+// stripUserinfo removes a "user:password@" part from a URL's authority and
+// reports whether there was one. It works on the raw string so a URL that
+// net/url rejects is still handled.
+func stripUserinfo(raw string) (string, bool) {
+	i := strings.Index(raw, "://")
+	if i < 0 {
+		return raw, false
+	}
+	rest := raw[i+3:]
+	end := strings.IndexAny(rest, "/?#")
+	if end < 0 {
+		end = len(rest)
+	}
+	at := strings.LastIndex(rest[:end], "@")
+	if at < 0 {
+		return raw, false
+	}
+	return raw[:i+3] + rest[at+1:], true
+}
+
+// redactURLFields strips userinfo from the caldav_url of a view item.
+func redactURLFields(m map[string]any) {
+	if u, ok := m["caldav_url"].(string); ok {
+		m["caldav_url"], _ = stripUserinfo(u)
+	}
 }
 
 func sourcesView(list []SourceConfig) (map[string]any, []string, error) {
@@ -372,6 +403,7 @@ func sourcesView(list []SourceConfig) (map[string]any, []string, error) {
 		}
 		delete(m, "password")
 		delete(m, "ics_url")
+		redactURLFields(m)
 		m["has_secret"] = hasSecret(src)
 		values[src.ID] = m
 		order = append(order, src.ID)
@@ -389,6 +421,7 @@ func destinationsView(list []DestinationConfig) (map[string]any, []string, error
 		}
 		delete(m, "password")
 		delete(m, "ics_url")
+		redactURLFields(m)
 		key := DestinationKey(dst.ID, dst.CalendarID)
 		values[key] = m
 		order = append(order, key)
@@ -493,6 +526,13 @@ func checkItem(coll, id string, e any, dk domainKey) error {
 	identity := spec.Identity(id)
 	if id == "" || spec.Key(identity) != id {
 		return validationf("%s: invalid id %q", coll, id)
+	}
+	// "|" separates id and calendar_id in destination keys, so it cannot
+	// appear inside either (or in a source id a destination refers to).
+	for _, f := range sortedKeys(identity) {
+		if strings.Contains(str(identity[f]), "|") {
+			return validationf("%s: %s must not contain \"|\"", path, f)
+		}
 	}
 	if e == nil {
 		return nil
@@ -610,6 +650,11 @@ func checkReference(path, field string, v any) error {
 	s, ok := v.(string)
 	if !ok || s == "" {
 		return nil // null or empty clears the reference
+	}
+	if field == "caldav_url" {
+		if _, userinfo := stripUserinfo(s); userinfo {
+			return validationf("%s: must not embed credentials (user:password@); set username, and keep the password out of the API", path)
+		}
 	}
 	if strings.HasSuffix(field, "_env") && !envRefPattern.MatchString(s) {
 		return validationf("%s: env var name must match %s", path, envRefPattern)

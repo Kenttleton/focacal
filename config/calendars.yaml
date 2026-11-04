@@ -12,4 +12,5 @@ sources:
     #   calendar_ids: []
     # - id: "team-feed"
     #   type: "ics"
-    #   ics_url_env: "FOCACAL_ICS_TEAM_FEED" # feed URL lives in .env
+    #   ics_url_env: "FOCACAL_ICS_TEAM_FEED" # feed URL lives in .env; if unset,
+    #                                        # only this calendar fails to sync

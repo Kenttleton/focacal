@@ -11,6 +11,15 @@ services:
       - "${MCP_PORT:-5234}:5234"        # MCP server — optional external clients
       - "${OAUTH_PORT:-8080}:8080"      # OAuth2 callback — used only during 'focacal auth'
 
+    # Pass .env into the container (it is optional: without it the defaults
+    # below apply). This is how ics_url_env feeds (FOCACAL_ICS_*), the agent
+    # key (FOCACAL_AGENT_API_KEY) and other FOCACAL_<SECTION>_<KEY>
+    # overrides reach focacal. Entries under environment: take precedence;
+    # they read the same .env values, so the two agree.
+    env_file:
+      - path: .env
+        required: false
+
     environment:
       # Core
       FOCACAL_DEBUG: "${FOCACAL_DEBUG:-false}"

@@ -205,7 +205,10 @@ func (s SourceConfig) ResolveICSURL() (string, error) {
 	if s.ICSURL != "" {
 		return s.ICSURL, nil
 	}
-	return "", fmt.Errorf("ics_url is required")
+	if s.ICSURLEnv != "" {
+		return "", fmt.Errorf("environment variable %s (ics_url_env) is not set", s.ICSURLEnv)
+	}
+	return "", fmt.Errorf("ics_url_env (or ics_url) is required")
 }
 
 type ServerConfig struct {

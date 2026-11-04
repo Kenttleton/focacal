@@ -37,6 +37,9 @@ cp .env.example .env
 ```
 
 Edit `.env` and fill in your OAuth credentials. See [OAuth setup](#oauth-setup) below.
+docker-compose.yml passes `.env` into the container, so ICS feed URLs referenced
+by `ics_url_env` and `FOCACAL_AGENT_API_KEY` go there too. An unset feed
+variable only stops that calendar from syncing (startup logs a warning).
 
 Edit the config directory, `config/`: working hours and timezone in
 `config/planner.yaml`, calendar sources in `config/calendars.yaml`, ports and
@@ -52,6 +55,11 @@ Upgrading from a single `config.yaml`? Delete the sample `config/planner.yaml` a
 (`rm -f config/planner.yaml config/calendars.yaml && mv config.yaml config/config.yaml`).
 focacal splits it into the new files on first start and keeps `config.yaml.bak`;
 it refuses to start, changing nothing, if those sample files are still there.
+If that file has a login (`auth.password_hash`), the hash moves to
+`config/credentials.yaml`. Hashes from this repository's earlier commits are
+public, so rotate the login right after upgrading (`POST /auth/reset`, or
+delete `config/credentials.yaml` and run setup again). See
+[docs/config-domains.md](docs/config-domains.md#note-on-git-history).
 
 ### 2. Start the stack
 

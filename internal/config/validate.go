@@ -137,10 +137,12 @@ func (c *Config) ValidateCalendars() error {
 			errs = append(errs, fmt.Errorf("unknown type %q", s.Type))
 		}
 
-		if s.Type == "ics" {
-			if _, err := s.ResolveICSURL(); err != nil {
-				errs = append(errs, fmt.Errorf("ics source %q: ics_url is required", s.ID))
-			}
+		// An ics source needs a reference or an inline URL. Whether the
+		// referenced variable is set is not checked here (R14): an unset
+		// variable is a startup warning (UnresolvedEnvRefs) and a sync-time
+		// error for that source only.
+		if s.Type == "ics" && s.ICSURL == "" && s.ICSURLEnv == "" {
+			errs = append(errs, fmt.Errorf("ics source %q: ics_url_env (or ics_url) is required", s.ID))
 		}
 	}
 
