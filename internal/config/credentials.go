@@ -52,7 +52,13 @@ func LoadCredentials(dir string) (Credentials, bool, error) {
 func SaveCredentials(dir string, c Credentials) error {
 	credMu.Lock()
 	defer credMu.Unlock()
-	return NewWriterMode(credentialsPath(dir), 0600).Update(func(doc *yaml.Node) error {
+	path := credentialsPath(dir)
+	// Writer keeps an existing file's mode; force 0600 before (so the rewrite
+	// and any fallback .bak are written at 0600) and after.
+	if err := chmodIfExists(path); err != nil {
+		return err
+	}
+	err := NewWriterMode(path, 0600).Update(func(doc *yaml.Node) error {
 		root := doc.Content[0]
 		if root.Kind != yaml.MappingNode {
 			return fmt.Errorf("credentials: top level is not a mapping")
@@ -61,6 +67,22 @@ func SaveCredentials(dir string, c Credentials) error {
 		setScalar(root, "password_hash", c.PasswordHash)
 		return nil
 	})
+	// The rename-failure fallback leaves <path>.bak with the old hash; an
+	// existing .bak keeps its old mode, so tighten both regardless of err.
+	if cerr := chmodIfExists(path); err == nil {
+		err = cerr
+	}
+	if cerr := chmodIfExists(path + ".bak"); err == nil {
+		err = cerr
+	}
+	return err
+}
+
+func chmodIfExists(p string) error {
+	if err := os.Chmod(p, 0600); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("chmod credentials: %w", err)
+	}
+	return nil
 }
 
 // SetupCredentials creates credentials.yaml with c only if it does not exist
@@ -116,6 +138,8 @@ func SetupCredentials(dir string, c Credentials) error {
 		err = cerr
 	}
 	if err != nil {
+		// Do not leave a partial file that would block setup forever.
+		os.Remove(target)
 		return fmt.Errorf("write credentials: %w", err)
 	}
 	return nil

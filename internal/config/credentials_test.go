@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 )
 
@@ -132,5 +133,54 @@ func TestGetAppOmitsLegacyAuthCredentials(t *testing.T) {
 		if strings.Contains(string(b), bad) {
 			t.Errorf("app view leaks %q: %s", bad, b)
 		}
+	}
+}
+
+func TestSaveCredentialsTightensExistingMode(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, CredentialsFile)
+	if err := os.WriteFile(p, []byte("username: a\npassword_hash: old\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	os.Chmod(p, 0644)
+	if err := SaveCredentials(dir, Credentials{Username: "a", PasswordHash: "new"}); err != nil {
+		t.Fatal(err)
+	}
+	st, _ := os.Stat(p)
+	if st.Mode().Perm() != 0600 {
+		t.Fatalf("mode = %o, want 0600", st.Mode().Perm())
+	}
+}
+
+func TestSaveCredentialsBackupMode0600(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, CredentialsFile)
+	if err := os.WriteFile(p, []byte("username: a\npassword_hash: old\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	os.Chmod(p, 0644)
+	// A stale world-readable .bak from an earlier write.
+	if err := os.WriteFile(p+".bak", []byte("password_hash: older\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	os.Chmod(p+".bak", 0644)
+	orig := renameFile
+	renameFile = func(string, string) error { return syscall.EBUSY }
+	defer func() { renameFile = orig }()
+	if err := SaveCredentials(dir, Credentials{Username: "a", PasswordHash: "new"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{p, p + ".bak"} {
+		st, err := os.Stat(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.Mode().Perm() != 0600 {
+			t.Errorf("%s mode = %o, want 0600", filepath.Base(f), st.Mode().Perm())
+		}
+	}
+	c, _, _ := LoadCredentials(dir)
+	if c.PasswordHash != "new" {
+		t.Fatalf("hash = %q, want new", c.PasswordHash)
 	}
 }

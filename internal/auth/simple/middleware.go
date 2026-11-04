@@ -16,10 +16,12 @@ import (
 )
 
 // Middleware returns an HTTP middleware enforcing auth. credentialsPresent
-// reports whether login credentials (credentials.yaml) exist; when neither
-// they nor auth.api_key are set, a one-off session key is generated. A nil
-// hook means no credentials. /auth/setup is always reachable; the handler
-// itself refuses once credentials exist.
+// reports whether login credentials (credentials.yaml) exist. It is called
+// once, here at construction (startup): when neither credentials nor
+// auth.api_key are set, a one-off session key is generated and logged. A nil
+// hook means no credentials. It is not consulted per request: /auth/setup,
+// /auth/login and /auth/recover always pass through, and the setup handler
+// itself refuses (per request) once credentials.yaml exists.
 func Middleware(cfg config.AuthConfig, credentialsPresent func() bool, log *slog.Logger) func(http.Handler) http.Handler {
 	if !cfg.Enabled {
 		return func(next http.Handler) http.Handler { return next }
@@ -110,17 +112,40 @@ func VerifyPassword(hash, pw string) bool {
 }
 
 // In-memory token registry (survives for process lifetime). Guarded by
-// tokensMu: handlers and middleware run on concurrent goroutines.
+// tokensMu: handlers and middleware run on concurrent goroutines. generation
+// counts RevokeAll calls so a token minted against credentials that were
+// replaced meanwhile can be refused (see StoreTokenAt).
 var (
 	tokensMu    sync.RWMutex
 	validTokens = make(map[string]bool)
+	generation  uint64
 )
 
-// StoreToken registers a newly issued token.
+// StoreToken registers a newly issued token unconditionally.
 func StoreToken(tok string) {
 	tokensMu.Lock()
 	validTokens[tok] = true
 	tokensMu.Unlock()
+}
+
+// Generation returns the current revocation generation. Capture it before
+// reading the credentials a token will be issued against.
+func Generation() uint64 {
+	tokensMu.RLock()
+	defer tokensMu.RUnlock()
+	return generation
+}
+
+// StoreTokenAt registers tok only if no RevokeAll happened since gen was
+// read; it reports whether the token was stored.
+func StoreTokenAt(tok string, gen uint64) bool {
+	tokensMu.Lock()
+	defer tokensMu.Unlock()
+	if gen != generation {
+		return false
+	}
+	validTokens[tok] = true
+	return true
 }
 
 // IsValidToken reports whether tok was issued this process and not revoked.
@@ -130,9 +155,11 @@ func IsValidToken(tok string) bool {
 	return validTokens[tok]
 }
 
-// RevokeAll invalidates every issued token (used on password reset/recover).
+// RevokeAll invalidates every issued token and advances the generation
+// (used when credentials change: setup, reset, recover).
 func RevokeAll() {
 	tokensMu.Lock()
 	clear(validTokens)
+	generation++
 	tokensMu.Unlock()
 }

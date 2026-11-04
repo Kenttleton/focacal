@@ -893,6 +893,8 @@ func (s *Server) handleAuthSetup(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// New credentials: tokens from any earlier (deleted) credentials die.
+	simple.RevokeAll()
 	writeJSON(w, http.StatusOK, map[string]string{"token": issueToken()})
 }
 
@@ -905,18 +907,48 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	// Capture the revocation generation before reading credentials: if a
+	// reset/recover/setup replaces them (and calls RevokeAll) while bcrypt
+	// runs, the token below is refused instead of outliving the old hash.
+	gen := simple.Generation()
 	c, ok, err := config.LoadCredentials(s.configDir)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if !ok || subtle.ConstantTimeCompare([]byte(c.Username), []byte(u.Username)) != 1 ||
-		!simple.VerifyPassword(c.PasswordHash, u.Password) {
+	userOK := ok && subtle.ConstantTimeCompare([]byte(c.Username), []byte(u.Username)) == 1
+	hash := c.PasswordHash
+	if !userOK {
+		hash = dummyHash() // always run bcrypt: no username timing oracle
+	}
+	pwOK := simple.VerifyPassword(hash, u.Password)
+	if !userOK || !pwOK {
 		writeError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"token": issueToken()})
+	loginVerifiedHook()
+	tok := simple.GenerateKey()
+	if !simple.StoreTokenAt(tok, gen) {
+		writeError(w, http.StatusUnauthorized, "credentials changed; log in again")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"token": tok})
 }
+
+// dummyHash is a bcrypt hash of a random secret, verified against when the
+// username is unknown so failed logins cost the same either way.
+var dummyHash = sync.OnceValue(func() string {
+	h, err := simple.HashPassword(simple.GenerateKey())
+	if err != nil {
+		panic("auth: cannot build dummy hash: " + err.Error())
+	}
+	return h
+})
+
+// loginVerifiedHook runs in login after the password is verified and before
+// the token is registered. Test seam for forcing a reset/recover into that
+// window; a no-op in production.
+var loginVerifiedHook = func() {}
 
 func (s *Server) handleAuthReset(w http.ResponseWriter, r *http.Request) {
 	var u struct {
