@@ -156,7 +156,9 @@ func LoadStart(dir string) (started, running *Config, err error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	ApplyEnv(running, os.Getenv)
+	if err := ApplyEnv(running, os.Getenv); err != nil {
+		return nil, nil, fmt.Errorf("environment: %w", err)
+	}
 	if err := running.Validate(); err != nil {
 		return nil, nil, err
 	}

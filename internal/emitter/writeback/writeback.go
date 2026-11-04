@@ -13,18 +13,18 @@ import (
 
 // Config controls how planned blocks appear on source calendars.
 type Config struct {
-	CrossBusyTitle string     `mapstructure:"cross_busy_title"` // "Meeting"
-	Focus          BlockConfig `mapstructure:"focus"`
-	Lunch          BlockConfig `mapstructure:"lunch"`
-	Break          BlockConfig `mapstructure:"break"`
+	CrossBusyTitle string // "Meeting"
+	Focus          BlockConfig
+	Lunch          BlockConfig
+	Break          BlockConfig
 }
 
 // BlockConfig describes how a single block type is written back.
 type BlockConfig struct {
-	Enabled     bool   `mapstructure:"enabled"`
-	Title       string `mapstructure:"title"`
-	ShowAs      string `mapstructure:"show_as"` // busy | free | tentative
-	Description string `mapstructure:"description"`
+	Enabled     bool
+	Title       string
+	ShowAs      string // busy | free | tentative
+	Description string
 }
 
 // Emitter writes AI-planned blocks and cross-calendar busy blocks back to

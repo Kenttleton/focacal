@@ -1,13 +1,19 @@
 package config
 
-import "strconv"
+import (
+	"errors"
+	"fmt"
+	"strconv"
+)
 
 // ApplyEnv overrides c from the environment: FOCACAL_<KEY> with the dots of
 // the config key written as underscores (FOCACAL_SERVER_REST_PORT), plus
 // OAUTH_REDIRECT_BASE_URL. getenv returns "" for an unset variable, which
-// leaves the value alone. An int or bool that does not parse is ignored and
-// the file value is kept. Only the running config gets this; see LoadStart.
-func ApplyEnv(c *Config, getenv func(string) string) {
+// leaves the value alone. An int or bool that does not parse is an error
+// naming the variable (never its value, which may be a secret); the file
+// value is kept for it. Only the running config gets this; see LoadStart.
+func ApplyEnv(c *Config, getenv func(string) string) error {
+	var errs []error
 	str := func(name string, dst *string) {
 		if v := getenv(name); v != "" {
 			*dst = v
@@ -17,6 +23,8 @@ func ApplyEnv(c *Config, getenv func(string) string) {
 		if v := getenv(name); v != "" {
 			if n, err := strconv.Atoi(v); err == nil {
 				*dst = n
+			} else {
+				errs = append(errs, fmt.Errorf("%s: not an integer (value not shown)", name))
 			}
 		}
 	}
@@ -24,6 +32,8 @@ func ApplyEnv(c *Config, getenv func(string) string) {
 		if v := getenv(name); v != "" {
 			if b, err := strconv.ParseBool(v); err == nil {
 				*dst = b
+			} else {
+				errs = append(errs, fmt.Errorf("%s: not a boolean (value not shown)", name))
 			}
 		}
 	}
@@ -62,4 +72,5 @@ func ApplyEnv(c *Config, getenv func(string) string) {
 
 	str("FOCACAL_OAUTH_REDIRECT_BASE_URL", &c.OAuth.RedirectBaseURL)
 	str("OAUTH_REDIRECT_BASE_URL", &c.OAuth.RedirectBaseURL) // wins over the prefixed form, as before
+	return errors.Join(errs...)
 }

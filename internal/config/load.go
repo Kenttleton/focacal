@@ -37,7 +37,7 @@ func decodeDomain(d Domain, b []byte, into *Config) error {
 	for i := 0; i+1 < len(root.Content); i += 2 {
 		for _, dk := range domainKeys[d] {
 			if root.Content[i].Value == dk.name {
-				own.Content = append(own.Content, root.Content[i], dropLegacyAuthKeys(dk.name, root.Content[i+1]))
+				own.Content = append(own.Content, root.Content[i], dropObsoleteKeys(dk.name, root.Content[i+1]))
 			}
 		}
 	}
@@ -56,18 +56,44 @@ func decodeDomain(d Domain, b []byte, into *Config) error {
 	return nil
 }
 
-// dropLegacyAuthKeys removes the credential keys that used to live under auth
-// in config.yaml (they moved to credentials.yaml; see legacyCredentialKeys).
-// Files not yet migrated still hold them and must keep loading, so strict
-// decoding must not see them.
-func dropLegacyAuthKeys(key string, v *yaml.Node) *yaml.Node {
-	if key != "auth" || v.Kind != yaml.MappingNode {
+// obsoleteItemKeys are per-item keys that older SourceConfig/DestinationConfig
+// versions had and later lost (git history: writeback and cross_busy on
+// sources, from the pre-directory single config.yaml). MigrateLegacy moves
+// sources verbatim, so they must keep loading under strict decoding.
+var obsoleteItemKeys = []string{"writeback", "cross_busy"}
+
+// dropObsoleteKeys removes known-obsolete keys from v before the strict
+// decode: the credential keys that left config.yaml's auth (they moved to
+// credentials.yaml; see legacyCredentialKeys) and obsoleteItemKeys on each
+// source and destination. Any other unknown key is still rejected.
+func dropObsoleteKeys(key string, v *yaml.Node) *yaml.Node {
+	switch key {
+	case "auth":
+		return withoutKeys(v, legacyCredentialKeys)
+	case "sources", "destinations":
+		if v.Kind != yaml.SequenceNode {
+			return v
+		}
+		out := *v
+		out.Content = make([]*yaml.Node, len(v.Content))
+		for i, item := range v.Content {
+			out.Content[i] = withoutKeys(item, obsoleteItemKeys)
+		}
+		return &out
+	}
+	return v
+}
+
+// withoutKeys returns a copy of mapping node v without the named keys; other
+// nodes are returned as they are.
+func withoutKeys(v *yaml.Node, drop []string) *yaml.Node {
+	if v.Kind != yaml.MappingNode {
 		return v
 	}
 	out := *v
 	out.Content = nil
 	for i := 0; i+1 < len(v.Content); i += 2 {
-		if !slices.Contains(legacyCredentialKeys, v.Content[i].Value) {
+		if !slices.Contains(drop, v.Content[i].Value) {
 			out.Content = append(out.Content, v.Content[i], v.Content[i+1])
 		}
 	}

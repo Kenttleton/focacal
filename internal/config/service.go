@@ -174,11 +174,12 @@ func (s *Service) Patch(d Domain, body []byte) (View, error) {
 		cfg, err := loadFiles(files)
 		if err != nil {
 			// The patch was shape-checked (checkPatch) and its map keys
-			// checked (rejectEmptyMapKeys), so a failure here is expected to come from a file on disk (a hand
-			// edit that no longer parses or decodes). That is not the
-			// request's fault, so it carries no error kind (HTTP 500). If a
-			// patch-caused case is found, reject it in checkPatch or
-			// rejectEmptyMapKeys rather than tagging this error.
+			// checked (rejectEmptyMapKeys), so a failure here is expected
+			// to come from a file on disk (a hand edit that no longer
+			// parses or decodes). That is not the request's fault, so it
+			// carries no error kind (HTTP 500). If a patch-caused case is
+			// found, reject it in checkPatch or rejectEmptyMapKeys rather
+			// than tagging this error.
 			return err
 		}
 		if err := d.validate(cfg); err != nil {

@@ -98,3 +98,19 @@ func TestDecodeDomain_LegacyAuthCredentialKeys(t *testing.T) {
 		t.Error("auth.enabled not decoded")
 	}
 }
+
+func TestDecodeDomain_ObsoleteSourceKeysDroppedTyposRejected(t *testing.T) {
+	c := Defaults()
+	ok := "sources:\n  - id: a\n    type: google\n    writeback: true\n    cross_busy: false\n"
+	if err := decodeDomain(DomainCalendars, []byte(ok), c); err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Sources) != 1 || c.Sources[0].ID != "a" {
+		t.Errorf("sources = %+v", c.Sources)
+	}
+	typo := "sources:\n  - id: a\n    type: google\n    calendar_idz: [x]\n"
+	err := decodeDomain(DomainCalendars, []byte(typo), Defaults())
+	if err == nil || !strings.Contains(err.Error(), "calendar_idz") {
+		t.Errorf("typo not rejected by name: %v", err)
+	}
+}

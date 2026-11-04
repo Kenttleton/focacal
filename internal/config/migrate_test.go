@@ -641,3 +641,26 @@ func TestMigrate_MergesIntoPopulatedTarget(t *testing.T) {
 		t.Fatalf("LoadDir = %+v, %v", c, err)
 	}
 }
+
+// TestMigrateThenLoadWithObsoleteSourceKeys: a pre-directory config.yaml whose
+// sources carry writeback/cross_busy migrates and then loads without edits.
+func TestMigrateThenLoadWithObsoleteSourceKeys(t *testing.T) {
+	dir := writeLegacy(t, `sources:
+  - id: work-google
+    type: google
+    writeback: true
+    cross_busy: false
+    calendar_ids: []
+writeback:
+  cross_busy_title: Meeting
+`)
+	if _, err := MigrateLegacy(dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := LoadStart(dir); err != nil {
+		t.Fatalf("LoadStart after migration: %v", err)
+	}
+	if _, err := LoadDir(dir); err != nil {
+		t.Fatalf("LoadDir after migration: %v", err)
+	}
+}
