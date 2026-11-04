@@ -83,11 +83,11 @@ type FocusConfig struct {
 // endpoint. Works with Ollama, OpenAI, Anthropic, Azure OpenAI, GitHub Models,
 // Groq, and others.
 type AgentConfig struct {
-	BaseURL     string `mapstructure:"base_url"`     // e.g. http://localhost:11434/v1
-	Model       string `mapstructure:"model"`        // e.g. qwen2.5:14b, gpt-4o, claude-sonnet-4-6
-	APIKey      string `mapstructure:"api_key"`      // leave empty for local/unauthenticated endpoints
-	TimeoutSecs int    `mapstructure:"timeout_secs"` // 120
-	MaxTokens   int    `mapstructure:"max_tokens"`   // 4096
+	BaseURL     string `mapstructure:"base_url" json:"base_url" yaml:"base_url"`     // e.g. http://localhost:11434/v1
+	Model       string `mapstructure:"model" json:"model" yaml:"model"`        // e.g. qwen2.5:14b, gpt-4o, claude-sonnet-4-6
+	APIKey      string `mapstructure:"api_key" json:"api_key" yaml:"api_key"`      // leave empty for local/unauthenticated endpoints
+	TimeoutSecs int    `mapstructure:"timeout_secs" json:"timeout_secs" yaml:"timeout_secs"` // 120
+	MaxTokens   int    `mapstructure:"max_tokens" json:"max_tokens" yaml:"max_tokens"`   // 4096
 }
 
 // SourceConfig describes a single calendar account (Google, Outlook, CalDAV, ICS).
@@ -214,26 +214,26 @@ func (s SourceConfig) ResolveICSURL() (string, error) {
 }
 
 type ServerConfig struct {
-	CalDAVPort      int  `mapstructure:"caldav_port"`  // 5232
-	RESTPort        int  `mapstructure:"rest_port"`    // 5233
-	MCPPort         int  `mapstructure:"mcp_port"`     // 5234
-	OAuthPort       int  `mapstructure:"oauth_port"`   // 8080
-	BindAddress     string `mapstructure:"bind_address"` // 0.0.0.0
-	WebhooksEnabled bool   `mapstructure:"webhooks_enabled"`
+	CalDAVPort      int  `mapstructure:"caldav_port" json:"caldav_port" yaml:"caldav_port"`  // 5232
+	RESTPort        int  `mapstructure:"rest_port" json:"rest_port" yaml:"rest_port"`    // 5233
+	MCPPort         int  `mapstructure:"mcp_port" json:"mcp_port" yaml:"mcp_port"`     // 5234
+	OAuthPort       int  `mapstructure:"oauth_port" json:"oauth_port" yaml:"oauth_port"`   // 8080
+	BindAddress     string `mapstructure:"bind_address" json:"bind_address" yaml:"bind_address"` // 0.0.0.0
+	WebhooksEnabled bool   `mapstructure:"webhooks_enabled" json:"webhooks_enabled" yaml:"webhooks_enabled"`
 }
 
 type OAuthConfig struct {
-	RedirectBaseURL string `mapstructure:"redirect_base_url"` // http://localhost:8080
+	RedirectBaseURL string `mapstructure:"redirect_base_url" json:"redirect_base_url" yaml:"redirect_base_url"` // http://localhost:8080
 }
 
 // AuthConfig controls the lightweight OSS authentication layer.
 // Set enabled=false for trusted LAN deployments that need no protection.
 type AuthConfig struct {
-	Enabled      bool   `mapstructure:"enabled"`        // default true
-	APIKey       string `mapstructure:"api_key"`       // legacy static key (backward compat)
-	Username     string `mapstructure:"username"`      // login username
-	PasswordHash string `mapstructure:"password_hash"` // bcrypt hash
-	SessionToken string `mapstructure:"session_token"` // hashed session token
+	Enabled      bool   `mapstructure:"enabled" json:"enabled" yaml:"enabled"`        // default true
+	APIKey       string `mapstructure:"api_key" json:"api_key" yaml:"api_key"`       // legacy static key (backward compat)
+	Username     string `mapstructure:"username" json:"username" yaml:"username"`      // login username
+	PasswordHash string `mapstructure:"password_hash" json:"password_hash" yaml:"password_hash"` // bcrypt hash
+	SessionToken string `mapstructure:"session_token" json:"session_token" yaml:"session_token"` // hashed session token
 }
 
 // Load reads and unmarshals config from viper.
