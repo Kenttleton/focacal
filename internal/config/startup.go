@@ -6,8 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
-	"github.com/spf13/viper"
 )
 
 // DirSource says how ResolveDir chose the config directory.
@@ -147,30 +145,23 @@ func LoadStart(dir string) (started, running *Config, err error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	started, err = loadFilesWith(files, nil)
+	started, err = loadFiles(files)
 	if err != nil {
 		return nil, nil, err
 	}
 	if err := started.Validate(); err != nil {
 		return nil, nil, err
 	}
-	running, err = loadFilesWith(files, bindEnv)
+	running, err = loadFiles(files)
 	if err != nil {
 		return nil, nil, err
 	}
+	ApplyEnv(running, os.Getenv)
 	if err := running.Validate(); err != nil {
 		return nil, nil, err
 	}
 	running.ResolveFilePaths(dir)
 	return started, running, nil
-}
-
-// bindEnv applies the environment overrides the CLI has always honoured.
-func bindEnv(v *viper.Viper) {
-	v.SetEnvPrefix("FOCACAL")
-	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
-	v.AutomaticEnv()
-	v.BindEnv("oauth.redirect_base_url", "OAUTH_REDIRECT_BASE_URL")
 }
 
 // ResolveFilePaths joins relative credentials_file and token_file values of

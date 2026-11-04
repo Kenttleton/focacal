@@ -8,7 +8,6 @@ import (
 	configexample "github.com/Kenttleton/focacal/config.example"
 	"github.com/Kenttleton/focacal/internal/config"
 	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
 )
 
 // cfgFlag is the raw --config value: a config directory, or a legacy
@@ -39,7 +38,6 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&cfgFlag, "config", "",
 		"config directory, or a legacy config.yaml path (default: search /data/config, $HOME/.config/focacal, .)")
 	rootCmd.PersistentFlags().Bool("debug", false, "enable debug logging")
-	viper.BindPFlag("debug", rootCmd.PersistentFlags().Lookup("debug"))
 }
 
 // loadConfig resolves the config directory, migrates a legacy single-file

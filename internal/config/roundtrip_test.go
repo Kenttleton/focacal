@@ -7,8 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spf13/viper"
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 func boolPtr(b bool) *bool { return &b }
@@ -79,16 +78,6 @@ func TestSourceConfigYAMLKeysAreSnakeCase(t *testing.T) {
 	}
 }
 
-func viperFrom(t *testing.T, kind string, data []byte) *viper.Viper {
-	t.Helper()
-	v := viper.New()
-	v.SetConfigType(kind)
-	if err := v.ReadConfig(bytes.NewReader(data)); err != nil {
-		t.Fatal(err)
-	}
-	return v
-}
-
 func roundTrip[T any](t *testing.T, in T) {
 	t.Helper()
 	y, err := yaml.Marshal(in)
@@ -99,9 +88,12 @@ func roundTrip[T any](t *testing.T, in T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// JSON is a subset of YAML, so one strict decoder reads both.
 	for kind, data := range map[string][]byte{"yaml": y, "json": j} {
 		var got T
-		if err := viperFrom(t, kind, data).Unmarshal(&got); err != nil {
+		dec := yaml.NewDecoder(bytes.NewReader(data))
+		dec.KnownFields(true)
+		if err := dec.Decode(&got); err != nil {
 			t.Fatalf("%s unmarshal: %v", kind, err)
 		}
 		if !reflect.DeepEqual(in, got) {

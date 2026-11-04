@@ -695,41 +695,41 @@ func TestPendingRestartClearsAfterAddThenDelete(t *testing.T) {
 	}
 }
 
-func TestPatchColorKeysLowercased(t *testing.T) {
+// TestPatchColorKeysKeepCase: color keys are read back exactly as written, so
+// a null-delete by the same key removes them.
+func TestPatchColorKeysKeepCase(t *testing.T) {
 	dir := writeTestDir(t)
 	svc, _ := newTestService(t, dir)
-	v, err := svc.Patch(DomainPlanner, []byte(`{"colors":{"Meeting":"#ff0000"}}`))
+	v, err := svc.Patch(DomainPlanner, []byte(`{"colors":{"Meeting":"#ff0000","a.b":"#00ff00"}}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c := obj(t, asMap(t, v), "values", "colors")["meeting"]; c != "#ff0000" {
-		t.Fatalf("colors.meeting = %v", c)
+	cols := obj(t, asMap(t, v), "values", "colors")
+	if cols["Meeting"] != "#ff0000" || cols["a.b"] != "#00ff00" {
+		t.Fatalf("colors = %v", cols)
 	}
-	if v, err = svc.Patch(DomainPlanner, []byte(`{"colors":{"meeting":null}}`)); err != nil {
+	if v, err = svc.Patch(DomainPlanner, []byte(`{"colors":{"Meeting":null,"a.b":null}}`)); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := obj(t, asMap(t, v), "values", "colors")["meeting"]; ok {
-		t.Error("null-delete of meeting did not remove the key written as Meeting")
+	cols = obj(t, asMap(t, v), "values", "colors")
+	if _, ok := cols["Meeting"]; ok {
+		t.Error("null-delete did not remove Meeting")
+	}
+	if _, ok := cols["a.b"]; ok {
+		t.Error("null-delete did not remove a.b")
 	}
 	b, _ := os.ReadFile(filepath.Join(dir, "planner.yaml"))
-	if strings.Contains(strings.ToLower(string(b)), "meeting") {
-		t.Errorf("planner.yaml still has a meeting color:\n%s", b)
-	}
-	if _, err := svc.Patch(DomainPlanner, []byte(`{"colors":{"Focus":"#1","focus":"#2"}}`)); !errors.Is(err, ErrBadRequest) {
-		t.Errorf("colliding keys: err = %v, want ErrBadRequest", err)
+	if strings.Contains(string(b), "Meeting") {
+		t.Errorf("planner.yaml still has a Meeting color:\n%s", b)
 	}
 }
 
-// TestPatchRejectsUnloadableMapKeys: viper splits map keys on "." (and an
-// empty key cannot be read back), so such a colors key would pass the shape
-// check and then fail to load. It must be a 400-class error with the files
-// untouched, not an untyped (500) load error.
-func TestPatchRejectsUnloadableMapKeys(t *testing.T) {
+// TestPatchRejectsEmptyMapKey: an empty color key is meaningless and cannot
+// be addressed later, so it is a 400 with the files untouched.
+func TestPatchRejectsEmptyMapKey(t *testing.T) {
 	for name, body := range map[string]string{
-		"dot":         `{"colors":{"a.b":"#ffffff"}}`,
-		"leading dot": `{"colors":{".a":"#ffffff"}}`,
-		"empty":       `{"colors":{"":"#ffffff"}}`,
-		"dot null":    `{"colors":{"a.b":null}}`,
+		"empty":      `{"colors":{"":"#ffffff"}}`,
+		"empty null": `{"colors":{"":null}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			dir := writeTestDir(t)

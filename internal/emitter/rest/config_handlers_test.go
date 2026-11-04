@@ -562,10 +562,10 @@ func (b *syncBuffer) String() string {
 	return b.b.String()
 }
 
-func TestPatchDotMapKeyReturns400(t *testing.T) {
+func TestPatchEmptyMapKeyReturns400(t *testing.T) {
 	s, dir := newConfigTestServer(t)
 	before := readFile(t, filepath.Join(dir, "planner.yaml"))
-	rec := doReq(t, s, http.MethodPatch, "/config/planner", []byte(`{"colors":{"a.b":"#ffffff"}}`))
+	rec := doReq(t, s, http.MethodPatch, "/config/planner", []byte(`{"colors":{"":"#ffffff"}}`))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("PATCH = %d %s, want 400", rec.Code, rec.Body)
 	}

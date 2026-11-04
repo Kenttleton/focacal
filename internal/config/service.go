@@ -14,9 +14,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/mitchellh/mapstructure"
-	"github.com/spf13/viper"
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 // ErrValidation marks a request whose shape is fine but whose values are not:
@@ -118,54 +116,6 @@ func readDomainFiles(dir string) (map[Domain][]byte, error) {
 	return out, nil
 }
 
-// loadFiles merges the domain files over the defaults and unmarshals them,
-// without validating. Each file contributes only its own domain's top-level
-// keys; anything else in it (a stray `sources:` in config.yaml, unread blocks
-// such as `ollama:`) is ignored, so one file can never override another.
-func loadFiles(files map[Domain][]byte) (*Config, error) { return loadFilesWith(files, nil) }
-
-// loadFilesWith is loadFiles with an optional hook to configure the viper
-// instance (LoadStart uses it to add environment overrides).
-func loadFilesWith(files map[Domain][]byte, prep func(*viper.Viper)) (*Config, error) {
-	v := viper.New()
-	applyDefaults(v)
-	if prep != nil {
-		prep(v)
-	}
-	v.SetConfigType("yaml")
-	for _, d := range Domains {
-		b := files[d]
-		if len(bytes.TrimSpace(b)) == 0 {
-			continue
-		}
-		var all map[string]any
-		if err := yaml.Unmarshal(b, &all); err != nil {
-			return nil, fmt.Errorf("parse %s: %w", d.File(), err)
-		}
-		own := map[string]any{}
-		for _, dk := range domainKeys[d] {
-			if val, ok := all[dk.name]; ok {
-				own[dk.name] = val
-			}
-		}
-		if len(own) == 0 {
-			continue
-		}
-		filtered, err := yaml.Marshal(own)
-		if err != nil {
-			return nil, fmt.Errorf("parse %s: %w", d.File(), err)
-		}
-		if err := v.MergeConfig(bytes.NewReader(filtered)); err != nil {
-			return nil, fmt.Errorf("parse %s: %w", d.File(), err)
-		}
-	}
-	var cfg Config
-	if err := v.Unmarshal(&cfg); err != nil {
-		return nil, fmt.Errorf("unmarshal config: %w", redactDecodeError(err))
-	}
-	return &cfg, nil
-}
-
 // Get returns the saved values of d.
 func (s *Service) Get(d Domain) (View, error) {
 	if !d.Valid() {
@@ -194,7 +144,7 @@ func (s *Service) Patch(d Domain, body []byte) (View, error) {
 	if err != nil {
 		return View{}, err
 	}
-	if err := lowerMapKeys(d, patch); err != nil {
+	if err := rejectEmptyMapKeys(d, patch); err != nil {
 		return View{}, err
 	}
 	if err := checkPatch(d, patch); err != nil {
@@ -224,12 +174,11 @@ func (s *Service) Patch(d Domain, body []byte) (View, error) {
 		cfg, err := loadFiles(files)
 		if err != nil {
 			// The patch was shape-checked (checkPatch) and its map keys
-			// restricted to ones viper reads back (lowerMapKeys), so a
-			// failure here is expected to come from a file on disk (a hand
+			// checked (rejectEmptyMapKeys), so a failure here is expected to come from a file on disk (a hand
 			// edit that no longer parses or decodes). That is not the
 			// request's fault, so it carries no error kind (HTTP 500). If a
 			// patch-caused case is found, reject it in checkPatch or
-			// lowerMapKeys rather than tagging this error.
+			// rejectEmptyMapKeys rather than tagging this error.
 			return err
 		}
 		if err := d.validate(cfg); err != nil {
@@ -244,34 +193,18 @@ func (s *Service) Patch(d Domain, body []byte) (View, error) {
 	return s.view(d, saved)
 }
 
-// lowerMapKeys lowercases the keys of map-typed values (colors) in patch,
-// because viper lowercases map keys on load: writing "Meeting" would read
-// back as "meeting", and a later null-delete of "meeting" would not find it.
-// It also rejects keys viper cannot read back: "" and any key containing "."
-// (viper treats "." as a path separator, so "a.b" would load as a nested map
-// and fail to decode).
-func lowerMapKeys(d Domain, patch map[string]any) error {
+// rejectEmptyMapKeys refuses an empty key in map-typed values (colors): it
+// names nothing, so it could never be addressed again.
+func rejectEmptyMapKeys(d Domain, patch map[string]any) error {
 	for _, dk := range domainKeys[d] {
 		if dk.typ.Kind() != reflect.Map {
 			continue
 		}
-		m, ok := patch[dk.name].(map[string]any)
-		if !ok {
-			continue
-		}
-		lowered := make(map[string]any, len(m))
-		for _, k := range sortedKeys(m) {
-			v := m[k]
-			if k == "" || strings.Contains(k, ".") {
-				return badRequestf("%s: key %q is not allowed (keys must be non-empty and must not contain \".\")", dk.name, k)
+		if m, ok := patch[dk.name].(map[string]any); ok {
+			if _, empty := m[""]; empty {
+				return badRequestf("%s: an empty key is not allowed", dk.name)
 			}
-			lk := strings.ToLower(k)
-			if _, dup := lowered[lk]; dup {
-				return badRequestf("%s: keys %q collide (keys are case-insensitive)", dk.name, lk)
-			}
-			lowered[lk] = v
 		}
-		patch[dk.name] = lowered
 	}
 	return nil
 }
@@ -436,32 +369,6 @@ func destinationsView(list []DestinationConfig) (map[string]any, []string, error
 	}
 	return values, order, nil
 }
-
-// redactDecodeError rewrites a config decode error to name only the fields
-// that failed. mapstructure messages quote the offending value ("..., value:
-// '<v>'", "cannot parse 'f' as int: ... \"<v>\""), and that value can be a
-// secret (an inline ics_url or password), while these errors end up in the
-// startup output and the server log.
-func redactDecodeError(err error) error {
-	var me *mapstructure.Error
-	items := []string{err.Error()}
-	if errors.As(err, &me) {
-		items = me.Errors
-	}
-	fields := make([]string, 0, len(items))
-	for _, it := range items {
-		if m := quotedField.FindStringSubmatch(it); m != nil {
-			fields = append(fields, m[1])
-		} else {
-			fields = append(fields, "?")
-		}
-	}
-	return fmt.Errorf("invalid value or type for %s (value not shown)", strings.Join(fields, ", "))
-}
-
-// quotedField matches the first single-quoted token of a mapstructure error
-// item, which is the field path.
-var quotedField = regexp.MustCompile(`'([^']*)'`)
 
 func badRequestf(format string, a ...any) error {
 	return fmt.Errorf("%w: %s", ErrBadRequest, fmt.Sprintf(format, a...))

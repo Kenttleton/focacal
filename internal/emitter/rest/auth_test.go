@@ -13,8 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spf13/viper"
-
 	"github.com/Kenttleton/focacal/internal/auth/simple"
 	"github.com/Kenttleton/focacal/internal/config"
 )
@@ -80,11 +78,6 @@ func TestSetupWritesCredentialsFileOnly(t *testing.T) {
 
 func TestLoginDoesNotRewriteConfigFiles(t *testing.T) {
 	s, dir := newAuthTestServer(t)
-	// Point the global viper at the dir's config.yaml so the old behaviour
-	// (rewriting viper.ConfigFileUsed on login) would be caught.
-	viper.SetConfigFile(filepath.Join(dir, "config.yaml"))
-	t.Cleanup(viper.Reset)
-
 	files := []string{"config.yaml", "planner.yaml", "calendars.yaml"}
 	past := time.Now().Add(-time.Hour).Truncate(time.Second)
 	for _, f := range files {

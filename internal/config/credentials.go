@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"sync"
 
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 // CredentialsFile is the local-only file in the config directory that holds

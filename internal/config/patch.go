@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 // CollectionSpec describes a top-level YAML sequence of mappings whose items

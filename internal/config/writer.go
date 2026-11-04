@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"sync"
 
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 // renameFile is a test seam for os.Rename.
