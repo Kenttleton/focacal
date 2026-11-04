@@ -11,6 +11,9 @@ import (
 type Registry struct {
 	mu    sync.RWMutex
 	conns map[string]Connector
+
+	lockMu  sync.Mutex // guards srcLock only; never held while waiting on a source lock
+	srcLock map[string]*sync.Mutex
 }
 
 // NewRegistry returns an empty Registry.
@@ -58,4 +61,24 @@ func (r *Registry) Replace(next map[string]Connector) {
 	r.mu.Lock()
 	r.conns = cp
 	r.mu.Unlock()
+}
+
+// LockSource takes the per-source-id lock and returns its unlock func. It
+// serialises everything that touches one source's stored state (syncs, purges)
+// across connector instances that share the id, so a replaced or re-added
+// source cannot interleave with its predecessor. It is independent of the
+// registry's read/write lock, so holding it while calling Get is safe.
+func (r *Registry) LockSource(id string) (unlock func()) {
+	r.lockMu.Lock()
+	if r.srcLock == nil {
+		r.srcLock = map[string]*sync.Mutex{}
+	}
+	m, ok := r.srcLock[id]
+	if !ok {
+		m = &sync.Mutex{}
+		r.srcLock[id] = m
+	}
+	r.lockMu.Unlock()
+	m.Lock()
+	return m.Unlock
 }

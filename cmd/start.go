@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/signal"
 	"reflect"
-	"sync"
 	"syscall"
 	"time"
 
@@ -167,7 +166,7 @@ func runStart(_ *cobra.Command, _ []string) error {
 		added, dropped := reconcile(reg, old, cur, build, log)
 		if len(dropped) > 0 {
 			go func() {
-				if purgeDropped(ctx, log, dropped, db.DeleteEventsBySource) > 0 {
+				if purgeDropped(ctx, log, reg, dropped, purgeSource(db)) > 0 {
 					b.Publish(bus.Message{Type: bus.EventReplanRequested, RequestID: newRequestID()})
 				}
 			}()
@@ -290,7 +289,7 @@ func syncOnly(ctx context.Context, log *slog.Logger, reg *connector.Registry, id
 func syncConnectors(ctx context.Context, log *slog.Logger, reg *connector.Registry, conns map[string]connector.Connector, b *bus.Bus) {
 	changed := false
 	for id, c := range conns {
-		err := syncInstance(ctx, c)
+		err := syncInstance(ctx, reg, id, c)
 		if cur, ok := reg.Get(id); !ok || cur != c {
 			log.Info("sync result discarded, source removed or replaced during sync", "source", id)
 			continue
@@ -312,12 +311,11 @@ func syncConnectors(ctx context.Context, log *slog.Logger, reg *connector.Regist
 	}
 }
 
-// managed wraps a connector instance with what the sync loop needs: a mutex
-// that serialises Sync calls on this instance, and a context cancelled when
-// reconcile drops or replaces the instance.
+// managed wraps a connector instance with a context cancelled when reconcile
+// drops or replaces the instance. Syncs are serialised per source id (not per
+// instance) by the registry's source lock.
 type managed struct {
 	connector.Connector
-	mu     sync.Mutex
 	ctx    context.Context
 	cancel context.CancelFunc
 }
@@ -327,16 +325,16 @@ func newManaged(c connector.Connector) *managed {
 	return &managed{Connector: c, ctx: ctx, cancel: cancel}
 }
 
-// syncInstance runs Sync on c. Concurrent requests for the same instance wait
-// their turn (so a requested sync always runs after the one in flight). The
-// Sync context is cancelled if the instance is dropped or replaced meanwhile.
-func syncInstance(ctx context.Context, c connector.Connector) error {
+// syncInstance runs Sync on c under the per-source-id lock, so concurrent
+// requests for the same id (same or successor instance) wait their turn and a
+// requested sync always runs after the one in flight. The Sync context is
+// cancelled if the instance is dropped or replaced meanwhile.
+func syncInstance(ctx context.Context, reg *connector.Registry, id string, c connector.Connector) error {
 	m, ok := c.(*managed)
 	if !ok {
 		return c.Sync(ctx)
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	defer reg.LockSource(id)()
 	if m.ctx.Err() != nil {
 		return m.ctx.Err()
 	}
@@ -448,24 +446,50 @@ func reconcile(reg *connector.Registry, old, cur *config.Config, build buildFunc
 	return added, dropped
 }
 
-// purgeDropped deletes the stored events of sources dropped from config. For
-// each it waits for the cancelled in-flight Sync (if any) to return, holding
-// the instance's sync lock while purging, so that Sync cannot re-insert rows
-// after the purge. It returns the total number of rows removed.
-func purgeDropped(ctx context.Context, log *slog.Logger, dropped []droppedSource, purge func(ctx context.Context, sourceID string) (int, error)) int {
+// purgeDropped deletes the stored state of sources dropped from config. For
+// each id it takes the per-source lock (waiting for the cancelled in-flight
+// Sync of the dropped instance to return, so it cannot write after the purge)
+// and then re-checks the registry: if the source was re-added meanwhile, the
+// purge is skipped entirely so rows written by the newer instance survive.
+// It returns the total number of rows removed.
+func purgeDropped(ctx context.Context, log *slog.Logger, reg *connector.Registry, dropped []droppedSource, purge func(ctx context.Context, sourceID string) (int, error)) int {
 	total := 0
 	for _, d := range dropped {
-		d.m.mu.Lock()
-		n, err := purge(ctx, d.id)
-		d.m.mu.Unlock()
-		if err != nil {
-			log.Warn("purge events of removed source failed", "source", d.id)
-			continue
+		n, skipped, err := purgeOne(ctx, reg, d.id, purge)
+		switch {
+		case skipped:
+			log.Info("purge skipped, source was re-added", "source", d.id)
+		case err != nil:
+			log.Warn("purge of removed source failed", "source", d.id)
+		default:
+			log.Info("purged events of removed source", "source", d.id, "count", n)
+			total += n
 		}
-		log.Info("purged events of removed source", "source", d.id, "count", n)
-		total += n
 	}
 	return total
+}
+
+func purgeOne(ctx context.Context, reg *connector.Registry, id string, purge func(context.Context, string) (int, error)) (n int, skipped bool, err error) {
+	defer reg.LockSource(id)()
+	if _, exists := reg.Get(id); exists {
+		return 0, true, nil
+	}
+	n, err = purge(ctx, id)
+	return n, false, err
+}
+
+// purgeSource returns the production purge: stored events plus incremental
+// sync state (so a re-added source re-fetches everything). OAuth tokens stay.
+// The returned count is the number of events removed.
+func purgeSource(db *store.DB) func(context.Context, string) (int, error) {
+	return func(ctx context.Context, id string) (int, error) {
+		n, err := db.DeleteEventsBySource(ctx, id)
+		if err != nil {
+			return n, err
+		}
+		_, err = db.DeleteSyncStateBySource(ctx, id)
+		return n, err
+	}
 }
 
 // plannerInputsChanged reports whether anything the planner or the source set

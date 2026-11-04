@@ -36,3 +36,25 @@ func TestDeleteEventsBySource(t *testing.T) {
 		t.Fatalf("unknown source deleted %d", n)
 	}
 }
+
+func TestDeleteSyncStateBySource(t *testing.T) {
+	ctx := context.Background()
+	db, err := Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, k := range []string{"a", "a:primary", "a:work", "ab", "ab:primary", "b:primary"} {
+		if err := db.SetSyncState(ctx, k, "t", "", time.Time{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	n, err := db.DeleteSyncStateBySource(ctx, "a")
+	if err != nil || n != 3 {
+		t.Fatalf("n=%d err=%v, want 3", n, err)
+	}
+	rows, _ := db.ListSyncStates(ctx)
+	if len(rows) != 3 || rows[0].SourceID != "ab" {
+		t.Fatalf("remaining = %v", rows)
+	}
+}

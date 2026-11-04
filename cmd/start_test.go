@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"github.com/Kenttleton/focacal/internal/bus"
 	"github.com/Kenttleton/focacal/internal/config"
 	"github.com/Kenttleton/focacal/internal/connector"
+	"github.com/Kenttleton/focacal/internal/store"
 )
 
 type fakeConn struct {
@@ -331,7 +333,7 @@ func TestPurgeDroppedWaitsForCancelledSync(t *testing.T) {
 	if len(dropped) != 1 || dropped[0].id != "a" {
 		t.Fatalf("dropped = %v", dropped)
 	}
-	n := purgeDropped(context.Background(), discardLog(), dropped, func(_ context.Context, id string) (int, error) {
+	n := purgeDropped(context.Background(), discardLog(), reg, dropped, func(_ context.Context, id string) (int, error) {
 		note("purge " + id)
 		return 3, nil
 	})
@@ -366,3 +368,111 @@ func TestSyncErrorNotLogged(t *testing.T) {
 type errConn struct{ *fakeConn }
 
 func (errConn) Sync(context.Context) error { return errors.New("GET https://u:hunter2@x.example/cal") }
+
+func openTestDB(t *testing.T) *store.DB {
+	t.Helper()
+	db, err := store.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	return db
+}
+
+func testEvent(src, uid string) *store.Event {
+	now := time.Now().UTC()
+	return &store.Event{ID: store.EventID(src, "c", uid), SourceID: src, CalendarID: "c", UID: uid,
+		Start: now, End: now.Add(time.Hour), Status: "confirmed"}
+}
+
+func eventCount(t *testing.T, db *store.DB) int {
+	t.Helper()
+	evs, err := db.ListEvents(context.Background(), time.Now().Add(-time.Hour), time.Now().Add(2*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(evs)
+}
+
+// A removed source that is re-added while the old Sync is still finishing
+// (ignoring ctx) must not have its fresh rows wiped by the old purge.
+func TestPurgeSkippedWhenSourceReAdded(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	release := make(chan struct{})
+	started := make(chan struct{})
+	oldConn := &fakeConn{id: "a", onSync: func(context.Context) { close(started); <-release }} // ignores ctx
+	reg, old := registerFake(oldConn)
+	b := bus.New(10 * time.Millisecond)
+	replans := make(chan bus.Message, 4)
+	b.Subscribe(func(m bus.Message) { replans <- m })
+
+	go syncOnly(ctx, discardLog(), reg, []string{"a"}, b)
+	<-started
+	empty := cfgWith()
+	_, dropped := reconcile(reg, old, empty, nil, discardLog())
+	purged := make(chan int, 1)
+	go func() { purged <- purgeDropped(ctx, discardLog(), reg, dropped, purgeSource(db)) }()
+
+	newConn := &fakeConn{id: "a", onSync: func(context.Context) {
+		if err := db.UpsertEvent(ctx, testEvent("a", "fresh")); err != nil {
+			t.Error(err)
+		}
+	}}
+	reconcile(reg, empty, cfgWith(config.SourceConfig{ID: "a", Type: "ics"}),
+		func(config.SourceConfig, string) (connector.Connector, error) { return newConn, nil }, discardLog())
+	syncDone := make(chan struct{})
+	go func() { syncOnly(ctx, discardLog(), reg, []string{"a"}, b); close(syncDone) }()
+
+	time.Sleep(50 * time.Millisecond) // both queued behind the old Sync
+	close(release)
+	if n := <-purged; n != 0 {
+		t.Fatalf("purged %d rows of a re-added source", n)
+	}
+	<-syncDone
+	if got := eventCount(t, db); got != 1 {
+		t.Fatalf("events = %d, want the new instance's row to survive", got)
+	}
+}
+
+func TestPlainRemovePurgesEventsAndSyncState(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	for _, e := range []*store.Event{testEvent("a", "1"), testEvent("b", "1")} {
+		if err := db.UpsertEvent(ctx, e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, k := range []string{"a", "a:cal", "b", "b:cal"} {
+		if err := db.SetSyncState(ctx, k, "tok", "", time.Time{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.SetOAuthToken(ctx, "a", "{}"); err != nil {
+		t.Fatal(err)
+	}
+	reg := connector.NewRegistry()
+	cfg := cfgWith(config.SourceConfig{ID: "a", Type: "ics"}, config.SourceConfig{ID: "b", Type: "ics"})
+	build, _ := fakeBuild()
+	reconcile(reg, nil, cfg, build, discardLog())
+	// drop a, rebuild b
+	next := cfgWith(config.SourceConfig{ID: "b", Type: "ics", Label: "changed"})
+	_, dropped := reconcile(reg, cfg, next, build, discardLog())
+	if n := purgeDropped(ctx, discardLog(), reg, dropped, purgeSource(db)); n != 1 {
+		t.Fatalf("purged = %d, want 1", n)
+	}
+	if got := eventCount(t, db); got != 1 {
+		t.Fatalf("events = %d, want only b's", got)
+	}
+	states, _ := db.ListSyncStates(ctx)
+	var ids []string
+	for _, s := range states {
+		ids = append(ids, s.SourceID)
+	}
+	if !reflect.DeepEqual(ids, []string{"b", "b:cal"}) {
+		t.Fatalf("sync states = %v, want only b's (rebuilt source untouched)", ids)
+	}
+	if tok, _ := db.GetOAuthToken(ctx, "a"); tok == "" {
+		t.Fatal("oauth token was deleted")
+	}
+}

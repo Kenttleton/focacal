@@ -204,6 +204,21 @@ type SyncStateRow struct {
 	WebhookExpiry time.Time `json:"webhook_expiry,omitempty"`
 }
 
+// DeleteSyncStateBySource removes the incremental-sync/webhook state of a
+// source: the row keyed by the bare source id (outlook webhook) and the
+// per-calendar rows keyed "<id>:<calendar>" (google and outlook sync tokens,
+// google webhooks). OAuth tokens are left alone so a re-added source keeps its
+// login. Returns the number of rows deleted.
+func (db *DB) DeleteSyncStateBySource(ctx context.Context, sourceID string) (int, error) {
+	const q = `DELETE FROM sync_state WHERE source_id = ? OR substr(source_id, 1, length(?) + 1) = ? || ':'`
+	res, err := db.ExecContext(ctx, q, sourceID, sourceID, sourceID)
+	if err != nil {
+		return 0, err
+	}
+	n, err := res.RowsAffected()
+	return int(n), err
+}
+
 // ListSyncStates returns the sync_state row for every known source.
 func (db *DB) ListSyncStates(ctx context.Context) ([]SyncStateRow, error) {
 	const q = `
