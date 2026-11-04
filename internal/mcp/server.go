@@ -625,15 +625,17 @@ func mergeIntervals(intervals []timeInterval) []timeInterval {
 
 // Agent drives the Ollama model through a tool-use loop against the MCP server.
 type Agent struct {
-	cfg    *config.Config
+	live   *config.Live
 	mcpURL string // internal MCP endpoint, e.g. http://localhost:5234/mcp
 	log    *slog.Logger
 }
 
 // NewAgent creates an Ollama agent.
-func NewAgent(cfg *config.Config, mcpPort int, log *slog.Logger) *Agent {
+// The config is read from live once per Replan, so a reload mid-replan never
+// mixes two configs.
+func NewAgent(live *config.Live, mcpPort int, log *slog.Logger) *Agent {
 	return &Agent{
-		cfg:    cfg,
+		live:   live,
 		mcpURL: fmt.Sprintf("http://localhost:%d/mcp", mcpPort),
 		log:    log,
 	}
@@ -648,7 +650,8 @@ func (a *Agent) Replan(ctx context.Context, log *slog.Logger) error {
 		log = a.log
 	}
 
-	cfg := a.cfg.Agent
+	snap := a.live.Current() // one snapshot for the whole replan
+	cfg := snap.Agent
 	apiURL := strings.TrimRight(cfg.BaseURL, "/") + "/chat/completions"
 	timeout := time.Duration(cfg.TimeoutSecs) * time.Second
 	if timeout == 0 {
@@ -664,7 +667,7 @@ func (a *Agent) Replan(ctx context.Context, log *slog.Logger) error {
 
 	agentTools := a.buildTools()
 	messages := []chatMessage{
-		{Role: "system", Content: a.buildSystemPrompt()},
+		{Role: "system", Content: buildSystemPrompt(&snap.UserConfig)},
 		{Role: "user", Content: fmt.Sprintf("Please plan my schedule for the next 7 days starting from %s.", time.Now().Format("2006-01-02"))},
 	}
 
@@ -777,7 +780,7 @@ func (a *Agent) callMCPTool(ctx context.Context, toolName string, arguments json
 }
 
 // buildSystemPrompt produces a focus-style-aware system prompt for the agent.
-func (a *Agent) buildSystemPrompt() string {
+func buildSystemPrompt(uc *config.UserConfig) string {
 	var b strings.Builder
 
 	b.WriteString(`You are a personal calendar scheduling assistant called Focacal.
@@ -791,9 +794,9 @@ Meetings take absolute priority; never place a block that overlaps an existing e
 Lunch priority: For each day, place a lunch block FIRST inside the configured lunch window
 (gaps with is_lunch_window=true) before placing any focus blocks. The lunch block should be
 %d minutes long. If no lunch-window gap exists, place lunch in the nearest available slot.`,
-		a.cfg.Lunch.DurationMinutes))
+		uc.Lunch.DurationMinutes))
 
-	switch a.cfg.Focus.Style {
+	switch uc.Focus.Style {
 	case "pomodoro":
 		b.WriteString(fmt.Sprintf(`
 
@@ -801,8 +804,8 @@ Pomodoro mode: Each gap shows a pomodoro_sets count — the number of complete %
 %d-min break cycles that fit. For every gap where pomodoro_sets >= 1, place alternating
 'focus' blocks of exactly %d minutes and 'break' blocks of exactly %d minutes until the
 gap is filled. Never place a single large focus block in pomodoro mode.`,
-			a.cfg.Focus.PomodoroWorkMinutes, a.cfg.Focus.PomodoroBreakMinutes,
-			a.cfg.Focus.PomodoroWorkMinutes, a.cfg.Focus.PomodoroBreakMinutes))
+			uc.Focus.PomodoroWorkMinutes, uc.Focus.PomodoroBreakMinutes,
+			uc.Focus.PomodoroWorkMinutes, uc.Focus.PomodoroBreakMinutes))
 
 	case "fixed":
 		b.WriteString(fmt.Sprintf(`
@@ -810,7 +813,7 @@ gap is filled. Never place a single large focus block in pomodoro mode.`,
 Fixed mode: Every focus block must be exactly %d minutes long. The gaps returned by
 focacal_get_free_gaps are already pre-split to this size (suggested_split=true).
 Place one focus block per slot. Do not merge slots or create partial blocks.`,
-			a.cfg.Focus.MaxBlockMinutes))
+			uc.Focus.MaxBlockMinutes))
 
 	default: // flexible
 		b.WriteString(fmt.Sprintf(`
@@ -818,7 +821,7 @@ Place one focus block per slot. Do not merge slots or create partial blocks.`,
 Flexible mode: Focus blocks should be between %d and %d minutes. Gaps with
 suggested_split=true are pre-sized to the maximum; you may use them as-is or leave
 shorter ones for natural breaks. Prefer longer uninterrupted blocks when available.`,
-			a.cfg.Focus.MinBlockMinutes, a.cfg.Focus.MaxBlockMinutes))
+			uc.Focus.MinBlockMinutes, uc.Focus.MaxBlockMinutes))
 	}
 
 	b.WriteString(`

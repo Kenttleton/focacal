@@ -81,7 +81,7 @@ func newConfigTestServerLog(t *testing.T, logOut io.Writer) (*Server, string) {
 	s := New(nil, NewHealthState(), "127.0.0.1:0", log)
 	s.SetConfigDir(dir)
 	s.SetConfigService(svc)
-	s.WrapHandler(simple.Middleware(config.AuthConfig{Enabled: true, APIKey: testKey}, nil, log))
+	s.WrapHandler(simple.Middleware(func() bool { return true }, func() string { return testKey }, nil, log))
 	return s, dir
 }
 

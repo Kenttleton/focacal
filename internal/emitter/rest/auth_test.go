@@ -28,7 +28,7 @@ func newAuthTestServer(t *testing.T) (*Server, string) {
 	s.SetConfigDir(dir)
 	s.SetRecoveryKeyPath(filepath.Join(dir, "recovery.key"))
 	present := func() bool { _, ok, _ := config.LoadCredentials(dir); return ok }
-	s.WrapHandler(simple.Middleware(config.AuthConfig{Enabled: true, APIKey: "static-test-key"}, present, log))
+	s.WrapHandler(simple.Middleware(func() bool { return true }, func() string { return "static-test-key" }, present, log))
 	return s, dir
 }
 
@@ -196,5 +196,20 @@ func TestAuthInternalErrorsAreGeneric(t *testing.T) {
 		if msg == "" || strings.Contains(msg, dir) || strings.Contains(msg, "credentials.yaml") || strings.Contains(msg, "directory") {
 			t.Errorf("%s error leaks internals: %q", tc.path, msg)
 		}
+	}
+}
+
+// Deleting credentials.yaml reopens /auth/setup without rebuilding the server.
+func TestSetupReopensAfterCredentialsFileDeleted(t *testing.T) {
+	s, dir := newAuthTestServer(t)
+	setupAndLogin(t, s, "kent", "pw1")
+	if code, _ := doJSON(t, s, "/auth/setup", "", map[string]string{"username": "x", "password": "y"}); code != http.StatusForbidden {
+		t.Fatalf("setup with credentials = %d, want 403", code)
+	}
+	if err := os.Remove(filepath.Join(dir, config.CredentialsFile)); err != nil {
+		t.Fatal(err)
+	}
+	if code, _ := doJSON(t, s, "/auth/setup", "", map[string]string{"username": "x", "password": "y"}); code != http.StatusOK {
+		t.Fatalf("setup after delete = %d, want 200", code)
 	}
 }

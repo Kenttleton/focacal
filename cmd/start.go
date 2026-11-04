@@ -100,12 +100,15 @@ func runStart(_ *cobra.Command, _ []string) error {
 		_, ok, err := config.LoadCredentials(configDir)
 		return ok || err != nil // an unreadable file still means credentials were set up
 	}
-	authMW := simple.Middleware(cfg.GlobalConfig.Auth, credentialsPresent, log)
+	authMW := simple.Middleware(
+		func() bool { return live.Current().Auth.Enabled },
+		func() string { return live.Current().Auth.APIKey },
+		credentialsPresent, log)
 	caldavSrv.WrapHandler(authMW)
 	restSrv.WrapHandler(authMW)
 	mcpSrv.WrapHandler(authMW)
 	// Build the Ollama agent.
-	agent := mcp.NewAgent(cfg, cfg.Server.MCPPort, log)
+	agent := mcp.NewAgent(live, cfg.Server.MCPPort, log)
 
 	// Wire up the bus: calendar changes → replan → notify emitters.
 	b.Subscribe(func(msg bus.Message) {

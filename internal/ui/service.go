@@ -18,13 +18,14 @@ var ErrNoConfigFile = fmt.Errorf("ui: no config file in use")
 // Service is the Wails-bound UI backend.
 type Service struct {
 	store  store.Store
-	cfg    *config.UserConfig
+	live   *config.Live
 	remote bool
 }
 
 // NewService creates a Service for local mode.
-func NewService(st store.Store, uc *config.UserConfig) *Service {
-	return &Service{store: st, cfg: uc}
+// Sources are read from live config on every call.
+func NewService(st store.Store, live *config.Live) *Service {
+	return &Service{store: st, live: live}
 }
 
 // Events returns events in [from, to).
@@ -62,11 +63,12 @@ func (s *Service) DismissConflict(ctx context.Context, key string) error {
 
 // Sources returns source summaries.
 func (s *Service) Sources(ctx context.Context) ([]map[string]any, error) {
-	if s.cfg == nil {
+	if s.live == nil {
 		return nil, fmt.Errorf("ui: no config")
 	}
-	out := make([]map[string]any, 0, len(s.cfg.Sources))
-	for _, src := range s.cfg.Sources {
+	srcs := s.live.Current().Sources
+	out := make([]map[string]any, 0, len(srcs))
+	for _, src := range srcs {
 		out = append(out, map[string]any{
 			"id":           src.ID,
 			"label":        src.Label,
