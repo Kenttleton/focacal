@@ -1,0 +1,21 @@
+# Build context for the Dockerfile: it needs go.mod, go.sum, main.go, cmd/
+# and internal/. Everything below is secret, local state or unrelated.
+.git
+.env
+.env.*
+!.env.example
+config/credentials.yaml
+config/*.bak
+config/*.json
+**/*.db
+**/*.db-shm
+**/*.db-wal
+**/node_modules
+.superpowers
+.claude
+.playwright-mcp
+.remember
+desktop
+mac-menubar
+windows-tray
+raycast-extension

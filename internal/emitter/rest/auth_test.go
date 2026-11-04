@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -168,6 +169,39 @@ func TestDeletingCredentialsReopensSetup(t *testing.T) {
 	for _, e := range entries {
 		if e.Name() != config.CredentialsFile {
 			t.Errorf("unexpected file in config dir: %s", e.Name())
+		}
+	}
+}
+
+// Auth handlers must not return internal error text (paths, file errors) on
+// 500; the details go to the server log.
+func TestAuthInternalErrorsAreGeneric(t *testing.T) {
+	s, dir := newAuthTestServer(t)
+	// credentials.yaml as a directory: every read and write of it fails.
+	if err := os.Mkdir(filepath.Join(dir, "credentials.yaml"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "recovery.key"), []byte("rk"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		path, token string
+		body        map[string]string
+	}{
+		{"/auth/setup", "", map[string]string{"username": "u", "password": "p"}},
+		{"/auth/login", "", map[string]string{"username": "u", "password": "p"}},
+		{"/auth/reset", "static-test-key", map[string]string{"new_password": "p2"}},
+		{"/auth/recover", "", map[string]string{"recovery_key": "rk", "username": "u", "new_password": "p2"}},
+	}
+	for _, tc := range cases {
+		code, out := doJSON(t, s, tc.path, tc.token, tc.body)
+		if code != http.StatusInternalServerError {
+			t.Errorf("%s = %d %v, want 500", tc.path, code, out)
+			continue
+		}
+		msg := out["error"]
+		if msg == "" || strings.Contains(msg, dir) || strings.Contains(msg, "credentials.yaml") || strings.Contains(msg, "directory") {
+			t.Errorf("%s error leaks internals: %q", tc.path, msg)
 		}
 	}
 }

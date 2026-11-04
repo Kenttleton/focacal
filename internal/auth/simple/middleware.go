@@ -100,9 +100,13 @@ func generateKeyImpl() string {
 	return hex.EncodeToString(b)
 }
 
-// HashPassword hashes a password with bcrypt.
+// BcryptCost is the bcrypt cost HashPassword uses. It stays
+// bcrypt.DefaultCost in production; tests may lower it (TestMain) for speed.
+var BcryptCost = bcrypt.DefaultCost
+
+// HashPassword hashes a password with bcrypt at BcryptCost.
 func HashPassword(pw string) (string, error) {
-	h, err := bcrypt.GenerateFromPassword([]byte(pw), bcrypt.DefaultCost)
+	h, err := bcrypt.GenerateFromPassword([]byte(pw), BcryptCost)
 	return string(h), err
 }
 

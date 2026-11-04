@@ -613,7 +613,7 @@ func (s *Server) handleAuthSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, ok, err := config.LoadCredentials(s.configDir); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		s.authInternalError(w, r, err)
 		return
 	} else if ok {
 		writeError(w, http.StatusForbidden, "already configured")
@@ -621,7 +621,7 @@ func (s *Server) handleAuthSetup(w http.ResponseWriter, r *http.Request) {
 	}
 	h, err := simple.HashPassword(u.Password)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		s.authInternalError(w, r, err)
 		return
 	}
 	if err := config.SetupCredentials(s.configDir, config.Credentials{Username: u.Username, PasswordHash: h}); err != nil {
@@ -629,7 +629,7 @@ func (s *Server) handleAuthSetup(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusForbidden, "already configured")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		s.authInternalError(w, r, err)
 		return
 	}
 	// New credentials: tokens from any earlier (deleted) credentials die.
@@ -652,7 +652,7 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 	gen := simple.Generation()
 	c, ok, err := config.LoadCredentials(s.configDir)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		s.authInternalError(w, r, err)
 		return
 	}
 	userOK := ok && subtle.ConstantTimeCompare([]byte(c.Username), []byte(u.Username)) == 1
@@ -703,7 +703,7 @@ func (s *Server) handleAuthReset(w http.ResponseWriter, r *http.Request) {
 	}
 	c, ok, err := config.LoadCredentials(s.configDir)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		s.authInternalError(w, r, err)
 		return
 	}
 	if !ok {
@@ -712,12 +712,12 @@ func (s *Server) handleAuthReset(w http.ResponseWriter, r *http.Request) {
 	}
 	h, err := simple.HashPassword(u.NewPassword)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		s.authInternalError(w, r, err)
 		return
 	}
 	c.PasswordHash = h
 	if err := config.SaveCredentials(s.configDir, c); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		s.authInternalError(w, r, err)
 		return
 	}
 	simple.RevokeAll()
@@ -750,15 +750,23 @@ func (s *Server) handleAuthRecover(w http.ResponseWriter, r *http.Request) {
 	}
 	h, err := simple.HashPassword(u.NewPassword)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		s.authInternalError(w, r, err)
 		return
 	}
 	if err := config.SaveCredentials(s.configDir, config.Credentials{Username: u.Username, PasswordHash: h}); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		s.authInternalError(w, r, err)
 		return
 	}
 	simple.RevokeAll()
 	writeJSON(w, http.StatusOK, map[string]string{"token": issueToken()})
+}
+
+// authInternalError logs an auth handler failure (file errors name paths,
+// never passwords or hashes) and returns a generic 500: the client gets no
+// paths or internal error text.
+func (s *Server) authInternalError(w http.ResponseWriter, r *http.Request, err error) {
+	s.log.Error("auth request failed", "path", r.URL.Path, "request_id", middleware.GetReqID(r.Context()), "err", err)
+	writeError(w, http.StatusInternalServerError, "internal error; see the server log")
 }
 
 // issueToken generates and registers a new session token.

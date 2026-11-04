@@ -10,8 +10,6 @@ export default defineConfig({
       '/health': 'http://localhost:5233',
       '/events': 'http://localhost:5233',
       '/conflicts': 'http://localhost:5233',
-      '/sources': 'http://localhost:5233',
-      '/destinations': 'http://localhost:5233',
       '/config': 'http://localhost:5233',
       '/blocks': 'http://localhost:5233',
       '/calendar.ics': 'http://localhost:5233',

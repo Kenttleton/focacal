@@ -48,3 +48,6 @@ config/credentials.yaml
 # Writer / migration backups (config.yaml.bak may hold a password hash)
 config/*.bak
 *.yaml.bak
+# OAuth client secret files referenced by credentials_file, and token files
+config/*.json
+config/**/*.json
