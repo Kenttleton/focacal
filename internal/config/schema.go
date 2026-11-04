@@ -229,11 +229,10 @@ type OAuthConfig struct {
 // AuthConfig controls the lightweight OSS authentication layer.
 // Set enabled=false for trusted LAN deployments that need no protection.
 type AuthConfig struct {
-	Enabled      bool   `mapstructure:"enabled" json:"enabled" yaml:"enabled"`        // default true
-	APIKey       string `mapstructure:"api_key" json:"api_key" yaml:"api_key"`       // legacy static key (backward compat)
-	Username     string `mapstructure:"username" json:"username" yaml:"username"`      // login username
-	PasswordHash string `mapstructure:"password_hash" json:"password_hash" yaml:"password_hash"` // bcrypt hash
-	SessionToken string `mapstructure:"session_token" json:"session_token" yaml:"session_token"` // hashed session token
+	Enabled bool   `mapstructure:"enabled" json:"enabled" yaml:"enabled"` // default true
+	APIKey  string `mapstructure:"api_key" json:"api_key" yaml:"api_key"` // legacy static key (backward compat)
+	// Login credentials (username, password_hash) live in credentials.yaml;
+	// see LoadCredentials.
 }
 
 // Load reads and unmarshals config from viper.

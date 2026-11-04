@@ -8,10 +8,12 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 	"github.com/Kenttleton/focacal/internal/auth/simple"
 	"github.com/Kenttleton/focacal/internal/bus"
 	"github.com/Kenttleton/focacal/internal/config"
@@ -111,10 +113,22 @@ func runStart(_ *cobra.Command, _ []string) error {
 	health := rest.NewHealthState()
 	caldavSrv := caldav.New(caldavAddr, log)
 	restSrv := rest.New(connectors, health, restAddr, log)
+	// Login credentials live in credentials.yaml beside the config file.
+	// T8 replaces this with the --config directory.
+	configDir := "."
+	if p := viper.ConfigFileUsed(); p != "" {
+		configDir = filepath.Dir(p)
+	}
+	restSrv.SetConfigDir(configDir)
+	restSrv.SetRecoveryKeyPath(recoveryPath)
 	mcpSrv := mcp.New(mcpAddr, log)
 
 	// Apply OSS auth middleware to all servers (no-op when auth.enabled = false).
-	authMW := simple.Middleware(cfg.GlobalConfig.Auth, log)
+	credentialsPresent := func() bool {
+		_, ok, err := config.LoadCredentials(configDir)
+		return ok || err != nil // an unreadable file still means credentials were set up
+	}
+	authMW := simple.Middleware(cfg.GlobalConfig.Auth, credentialsPresent, log)
 	caldavSrv.WrapHandler(authMW)
 	restSrv.WrapHandler(authMW)
 	mcpSrv.WrapHandler(authMW)

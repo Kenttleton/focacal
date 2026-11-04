@@ -8,20 +8,25 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/Kenttleton/focacal/internal/config"
 )
 
-// Middleware returns an HTTP middleware enforcing auth.
-func Middleware(cfg config.AuthConfig, log *slog.Logger) func(http.Handler) http.Handler {
+// Middleware returns an HTTP middleware enforcing auth. credentialsPresent
+// reports whether login credentials (credentials.yaml) exist; when neither
+// they nor auth.api_key are set, a one-off session key is generated. A nil
+// hook means no credentials. /auth/setup is always reachable; the handler
+// itself refuses once credentials exist.
+func Middleware(cfg config.AuthConfig, credentialsPresent func() bool, log *slog.Logger) func(http.Handler) http.Handler {
 	if !cfg.Enabled {
 		return func(next http.Handler) http.Handler { return next }
 	}
 
 	key := cfg.APIKey
-	if key == "" && cfg.PasswordHash == "" {
+	if key == "" && (credentialsPresent == nil || !credentialsPresent()) {
 		key = GenerateKey()
 		log.Info("OSS auth: no credentials configured — generated a session key",
 			"api_key", key,
@@ -104,17 +109,30 @@ func VerifyPassword(hash, pw string) bool {
 	return bcrypt.CompareHashAndPassword([]byte(hash), []byte(pw)) == nil
 }
 
-// in-memory token registry (survives for process lifetime)
-var validTokens = make(map[string]bool)
+// In-memory token registry (survives for process lifetime). Guarded by
+// tokensMu: handlers and middleware run on concurrent goroutines.
+var (
+	tokensMu    sync.RWMutex
+	validTokens = make(map[string]bool)
+)
 
 // StoreToken registers a newly issued token.
-func StoreToken(tok string) { validTokens[tok] = true }
+func StoreToken(tok string) {
+	tokensMu.Lock()
+	validTokens[tok] = true
+	tokensMu.Unlock()
+}
 
-// IsValidToken reports whether tok was issued this process.
-func IsValidToken(tok string) bool { return validTokens[tok] }
+// IsValidToken reports whether tok was issued this process and not revoked.
+func IsValidToken(tok string) bool {
+	tokensMu.RLock()
+	defer tokensMu.RUnlock()
+	return validTokens[tok]
+}
 
-// HashToken hashes a session token with bcrypt.
-func HashToken(tok string) (string, error) {
-	h, err := bcrypt.GenerateFromPassword([]byte(tok), bcrypt.DefaultCost)
-	return string(h), err
+// RevokeAll invalidates every issued token (used on password reset/recover).
+func RevokeAll() {
+	tokensMu.Lock()
+	clear(validTokens)
+	tokensMu.Unlock()
 }

@@ -41,3 +41,7 @@ docker-compose.override.yml
 .claude/worktrees/
 .superpowers/
 .playwright-mcp/
+
+# Local-only login credentials (internal/config/credentials.go)
+credentials.yaml
+config/credentials.yaml

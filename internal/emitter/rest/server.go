@@ -2,15 +2,18 @@ package rest
 
 import (
 	"context"
+	"crypto/subtle"
 	"database/sql"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -64,11 +67,30 @@ type Server struct {
 	addr       string
 	srv        *http.Server
 	log        *slog.Logger
+	// configDir holds credentials.yaml (and, from T8, the domain files).
+	configDir string
+	// recoveryKeyPath is the file /auth/recover checks the key against.
+	recoveryKeyPath string
 }
+
+// DefaultRecoveryKeyPath is where the recovery key lives in the container.
+const DefaultRecoveryKeyPath = "/data/recovery.key"
+
+// SetConfigDir sets the directory auth handlers read credentials.yaml from.
+func (s *Server) SetConfigDir(dir string) { s.configDir = dir }
+
+// SetRecoveryKeyPath overrides DefaultRecoveryKeyPath (tests use a temp file).
+func (s *Server) SetRecoveryKeyPath(p string) { s.recoveryKeyPath = p }
 
 // New creates a REST API server.
 func New(connectors map[string]connector.Connector, health *HealthState, addr string, log *slog.Logger) *Server {
-	s := &Server{connectors: connectors, health: health, addr: addr, log: log}
+	s := &Server{connectors: connectors, health: health, addr: addr, log: log, recoveryKeyPath: DefaultRecoveryKeyPath}
+	// Until SetConfigDir is called, use the directory of the loaded config file.
+	if p := viper.ConfigFileUsed(); p != "" {
+		s.configDir = filepath.Dir(p)
+	} else {
+		s.configDir = "."
+	}
 
 	r := chi.NewRouter()
 	r.Use(middleware.Recoverer)
@@ -835,6 +857,9 @@ func parseRange(r *http.Request) (time.Time, time.Time) {
 	return from, to
 }
 
+// Auth handlers read and write only credentials.yaml in s.configDir; they
+// never touch the domain files (config.yaml, planner.yaml, calendars.yaml).
+
 func (s *Server) handleAuthSetup(w http.ResponseWriter, r *http.Request) {
 	var u struct {
 		Username string `json:"username"`
@@ -844,9 +869,14 @@ func (s *Server) handleAuthSetup(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	uc := config.UserConfigFromContext(r.Context())
-	// only allow if no password set yet
-	if uc.Auth.PasswordHash != "" {
+	if u.Username == "" || u.Password == "" {
+		writeError(w, http.StatusBadRequest, "username and password are required")
+		return
+	}
+	if _, ok, err := config.LoadCredentials(s.configDir); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	} else if ok {
 		writeError(w, http.StatusForbidden, "already configured")
 		return
 	}
@@ -855,26 +885,15 @@ func (s *Server) handleAuthSetup(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	uc.Auth.Username = u.Username
-	uc.Auth.PasswordHash = h
-	// generate session token
-	tok := simple.GenerateKey()
-	th, _ := simple.HashToken(tok)
-	uc.Auth.SessionToken = th
-	// persist
-	path := viper.ConfigFileUsed()
-	if path != "" {
-		config.WriteSections(path, map[string]any{
-			"auth": map[string]any{
-				"enabled":       true,
-				"username":      uc.Auth.Username,
-				"password_hash": uc.Auth.PasswordHash,
-				"session_token": uc.Auth.SessionToken,
-			},
-		})
+	if err := config.SetupCredentials(s.configDir, config.Credentials{Username: u.Username, PasswordHash: h}); err != nil {
+		if errors.Is(err, config.ErrAlreadyConfigured) {
+			writeError(w, http.StatusForbidden, "already configured")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
-	simple.StoreToken(tok)
-	writeJSON(w, http.StatusOK, map[string]string{"token": tok})
+	writeJSON(w, http.StatusOK, map[string]string{"token": issueToken()})
 }
 
 func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
@@ -886,27 +905,17 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	uc := config.UserConfigFromContext(r.Context())
-	if uc.Auth.Username != u.Username || !simple.VerifyPassword(uc.Auth.PasswordHash, u.Password) {
+	c, ok, err := config.LoadCredentials(s.configDir)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !ok || subtle.ConstantTimeCompare([]byte(c.Username), []byte(u.Username)) != 1 ||
+		!simple.VerifyPassword(c.PasswordHash, u.Password) {
 		writeError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
-	tok := simple.GenerateKey()
-	th, _ := simple.HashToken(tok)
-	uc.Auth.SessionToken = th
-	path := viper.ConfigFileUsed()
-	if path != "" {
-		config.WriteSections(path, map[string]any{
-			"auth": map[string]any{
-				"enabled":       true,
-				"username":      uc.Auth.Username,
-				"password_hash": uc.Auth.PasswordHash,
-				"session_token": uc.Auth.SessionToken,
-			},
-		})
-	}
-	simple.StoreToken(tok)
-	writeJSON(w, http.StatusOK, map[string]string{"token": tok})
+	writeJSON(w, http.StatusOK, map[string]string{"token": issueToken()})
 }
 
 func (s *Server) handleAuthReset(w http.ResponseWriter, r *http.Request) {
@@ -917,29 +926,31 @@ func (s *Server) handleAuthReset(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	uc := config.UserConfigFromContext(r.Context())
+	if u.NewPassword == "" {
+		writeError(w, http.StatusBadRequest, "new_password is required")
+		return
+	}
+	c, ok, err := config.LoadCredentials(s.configDir)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !ok {
+		writeError(w, http.StatusConflict, "not configured; use /auth/setup")
+		return
+	}
 	h, err := simple.HashPassword(u.NewPassword)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	uc.Auth.PasswordHash = h
-	tok := simple.GenerateKey()
-	th, _ := simple.HashToken(tok)
-	uc.Auth.SessionToken = th
-	path := viper.ConfigFileUsed()
-	if path != "" {
-		config.WriteSections(path, map[string]any{
-			"auth": map[string]any{
-				"enabled":       true,
-				"username":      uc.Auth.Username,
-				"password_hash": uc.Auth.PasswordHash,
-				"session_token": uc.Auth.SessionToken,
-			},
-		})
+	c.PasswordHash = h
+	if err := config.SaveCredentials(s.configDir, c); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
-	simple.StoreToken(tok)
-	writeJSON(w, http.StatusOK, map[string]string{"token": tok})
+	simple.RevokeAll()
+	writeJSON(w, http.StatusOK, map[string]string{"token": issueToken()})
 }
 
 func (s *Server) handleAuthRecover(w http.ResponseWriter, r *http.Request) {
@@ -952,39 +963,38 @@ func (s *Server) handleAuthRecover(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	data, err := os.ReadFile("/data/recovery.key")
+	data, err := os.ReadFile(s.recoveryKeyPath)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "no recovery key on server")
 		return
 	}
-	if strings.TrimSpace(string(data)) != u.RecoveryKey {
+	key := strings.TrimSpace(string(data))
+	if key == "" || subtle.ConstantTimeCompare([]byte(key), []byte(u.RecoveryKey)) != 1 {
 		writeError(w, http.StatusUnauthorized, "invalid recovery key")
 		return
 	}
-	uc := config.UserConfigFromContext(r.Context())
+	if u.Username == "" || u.NewPassword == "" {
+		writeError(w, http.StatusBadRequest, "username and new_password are required")
+		return
+	}
 	h, err := simple.HashPassword(u.NewPassword)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	uc.Auth.Username = u.Username
-	uc.Auth.PasswordHash = h
-	tok := simple.GenerateKey()
-	th, _ := simple.HashToken(tok)
-	uc.Auth.SessionToken = th
-	path := viper.ConfigFileUsed()
-	if path != "" {
-		config.WriteSections(path, map[string]any{
-			"auth": map[string]any{
-				"enabled":       true,
-				"username":      uc.Auth.Username,
-				"password_hash": uc.Auth.PasswordHash,
-				"session_token": uc.Auth.SessionToken,
-			},
-		})
+	if err := config.SaveCredentials(s.configDir, config.Credentials{Username: u.Username, PasswordHash: h}); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
+	simple.RevokeAll()
+	writeJSON(w, http.StatusOK, map[string]string{"token": issueToken()})
+}
+
+// issueToken generates and registers a new session token.
+func issueToken() string {
+	tok := simple.GenerateKey()
 	simple.StoreToken(tok)
-	writeJSON(w, http.StatusOK, map[string]string{"token": tok})
+	return tok
 }
 
 func sortDTOs(dtos []EventDTO) {
