@@ -156,19 +156,28 @@ func (s *Service) Patch(d Domain, body []byte) (View, error) {
 
 	var saved *Config
 	// The candidate is built inside Update, under the writer's lock, from the
-	// same document that will be written, so a concurrent patch cannot slip
-	// in between validation and write. Returning an error discards doc.
-	err = s.writers[d].Update(func(doc *yaml.Node) error {
+	// bytes that will be replaced, so a concurrent patch cannot slip in
+	// between validation and write. Returning an error leaves the file alone.
+	err = s.writers[d].Update(func(cur []byte) ([]byte, error) {
+		doc := map[string]any{}
+		if len(bytes.TrimSpace(cur)) > 0 {
+			if err := yaml.Unmarshal(cur, &doc); err != nil {
+				return nil, fmt.Errorf("parse %s: top level must be a mapping: %w", d.File(), err)
+			}
+			if doc == nil {
+				doc = map[string]any{} // comments only
+			}
+		}
 		if err := ApplyMergePatch(doc, patch, d.collections()); err != nil {
-			return fmt.Errorf("apply patch to %s: %w", d.File(), err)
+			return nil, fmt.Errorf("apply patch to %s: %w", d.File(), err)
 		}
 		patched, err := yaml.Marshal(doc)
 		if err != nil {
-			return fmt.Errorf("encode %s: %w", d.File(), err)
+			return nil, fmt.Errorf("encode %s: %w", d.File(), err)
 		}
 		files, err := readDomainFiles(s.dir)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		files[d] = patched
 		cfg, err := loadFiles(files)
@@ -180,13 +189,17 @@ func (s *Service) Patch(d Domain, body []byte) (View, error) {
 			// carries no error kind (HTTP 500). If a patch-caused case is
 			// found, reject it in checkPatch or rejectEmptyMapKeys rather
 			// than tagging this error.
-			return err
+			return nil, err
 		}
 		if err := d.validate(cfg); err != nil {
-			return fmt.Errorf("%w: %w", ErrValidation, err)
+			return nil, fmt.Errorf("%w: %w", ErrValidation, err)
+		}
+		out, err := marshalDomain(d, cfg)
+		if err != nil {
+			return nil, err
 		}
 		saved = cfg
-		return nil
+		return out, nil
 	})
 	if err != nil {
 		return View{}, err

@@ -1,13 +1,10 @@
 package config
 
 import (
-	"errors"
 	"fmt"
 	"math"
 	"sort"
 	"strings"
-
-	"go.yaml.in/yaml/v3"
 )
 
 // CollectionSpec describes a top-level YAML sequence of mappings whose items
@@ -45,22 +42,14 @@ var DestinationsSpec = CollectionSpec{
 	},
 }
 
-// ApplyMergePatch applies an RFC 7396 merge patch to the YAML document doc,
-// preserving comments, key order and unknown keys of untouched content. Keys
-// named in c are top-level collections whose patch value is an object keyed
-// by item identity; a null entry removes the item.
-func ApplyMergePatch(doc *yaml.Node, patch map[string]any, c map[string]CollectionSpec) error {
-	root := doc
-	if root.Kind == yaml.DocumentNode {
-		if len(root.Content) == 0 {
-			return errors.New("config document is empty")
-		}
-		root = root.Content[0]
-	}
-	if root.Kind != yaml.MappingNode {
-		return errors.New("config root is not a mapping")
-	}
-	return mergeMapping(root, patch, c)
+// ApplyMergePatch applies an RFC 7396 merge patch to doc in place. Keys named
+// in c are top-level collections: lists of maps in doc, objects keyed by item
+// identity in patch, where a null entry removes the item, an unknown key
+// appends a new item and a known key merges into the item where it stands.
+// Values inserted from patch have nulls dropped and whole-number floats (as
+// JSON decodes them) turned into ints.
+func ApplyMergePatch(doc map[string]any, patch map[string]any, c map[string]CollectionSpec) error {
+	return mergeMap(doc, patch, c)
 }
 
 func sortedKeys(m map[string]any) []string {
@@ -72,201 +61,105 @@ func sortedKeys(m map[string]any) []string {
 	return keys
 }
 
-// findKey returns the index of key's value node in mapping m, or -1.
-func findKey(m *yaml.Node, key string) int {
-	for i := 0; i+1 < len(m.Content); i += 2 {
-		if m.Content[i].Value == key {
-			return i + 1
-		}
-	}
-	return -1
-}
-
-// removePair deletes the key/value pair whose value is at valIdx. When the
-// first pair is removed its head comment is usually a file or section header,
-// so it is handed to the next key (or to the mapping if none remains).
-func removePair(m *yaml.Node, valIdx int) {
-	if valIdx == 1 {
-		if hc := m.Content[0].HeadComment; hc != "" {
-			if len(m.Content) > 2 {
-				next := m.Content[2]
-				if next.HeadComment != "" {
-					hc += "\n\n" + next.HeadComment
-				}
-				next.HeadComment = hc
-			} else {
-				if m.HeadComment != "" {
-					hc += "\n\n" + m.HeadComment
-				}
-				m.HeadComment = hc
-			}
-		}
-	}
-	m.Content = append(m.Content[:valIdx-1], m.Content[valIdx+1:]...)
-}
-
-// mergeMapping merges patch into m. c is non-nil only at the document root.
-func mergeMapping(m *yaml.Node, patch map[string]any, c map[string]CollectionSpec) error {
+// mergeMap merges patch into m. c is non-nil only at the document root.
+func mergeMap(m, patch map[string]any, c map[string]CollectionSpec) error {
 	for _, key := range sortedKeys(patch) {
 		val := patch[key]
-		idx := findKey(m, key)
-
 		if val == nil {
-			if idx >= 0 {
-				removePair(m, idx)
-			}
+			delete(m, key)
 			continue
 		}
-
 		if spec, ok := c[key]; ok {
 			entries, isMap := val.(map[string]any)
 			if !isMap {
 				return fmt.Errorf("collection %q: patch must be an object keyed by item id", key)
 			}
-			if idx < 0 {
-				m.Content = append(m.Content,
-					&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
-					&yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"})
-				idx = len(m.Content) - 1
+			var list []any
+			if cur, present := m[key]; present {
+				var isList bool
+				if list, isList = cur.([]any); !isList {
+					return fmt.Errorf("collection %q: existing value is not a list", key)
+				}
+			} else {
+				list = []any{}
 			}
-			if m.Content[idx].Kind != yaml.SequenceNode {
-				return fmt.Errorf("collection %q: existing value is not a list", key)
-			}
-			if err := mergeCollection(m.Content[idx], entries, spec); err != nil {
+			list, err := mergeCollection(list, entries, spec)
+			if err != nil {
 				return fmt.Errorf("collection %q: %w", key, err)
 			}
+			m[key] = list
 			continue
 		}
-
-		if idx < 0 {
-			m.Content = append(m.Content,
-				&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
-				valueNode(val))
-			continue
-		}
-		existing := m.Content[idx]
-		if sub, isMap := val.(map[string]any); isMap && existing.Kind == yaml.MappingNode {
-			if err := mergeMapping(existing, sub, nil); err != nil {
-				return err
-			}
-			continue
-		}
-		m.Content[idx] = replaceValue(existing, val)
-	}
-	return nil
-}
-
-func mergeCollection(seq *yaml.Node, entries map[string]any, spec CollectionSpec) error {
-	// An empty "[]" is flow style; once items are added use block style.
-	if len(seq.Content) == 0 {
-		defer func() {
-			if len(seq.Content) > 0 {
-				seq.Style &^= yaml.FlowStyle
-			}
-		}()
-	}
-	for _, key := range sortedKeys(entries) {
-		entry := entries[key]
-		pos := -1
-		for i, item := range seq.Content {
-			if item.Kind != yaml.MappingNode {
-				continue
-			}
-			var decoded map[string]any
-			if err := item.Decode(&decoded); err != nil {
-				return fmt.Errorf("decode item: %w", err)
-			}
-			if spec.Key(decoded) == key {
-				pos = i
-				break
-			}
-		}
-		switch e := entry.(type) {
-		case nil:
-			if pos >= 0 {
-				seq.Content = append(seq.Content[:pos], seq.Content[pos+1:]...)
-			}
-		case map[string]any:
-			if pos >= 0 {
-				if err := mergeMapping(seq.Content[pos], e, nil); err != nil {
+		if sub, isMap := val.(map[string]any); isMap {
+			if existing, ok := m[key].(map[string]any); ok {
+				if err := mergeMap(existing, sub, nil); err != nil {
 					return err
 				}
 				continue
 			}
-			seq.Content = append(seq.Content, newItem(spec.Identity(key), e))
-		default:
-			return fmt.Errorf("item %q: patch must be an object or null", key)
 		}
+		m[key] = clean(val)
 	}
 	return nil
 }
 
-// newItem builds a mapping with identity fields first (id leading), then the
-// entry's own fields, skipping identity fields the entry overrides.
-func newItem(identity, entry map[string]any) *yaml.Node {
-	n := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
-	keys := sortedKeys(identity)
-	sort.SliceStable(keys, func(i, j int) bool { return keys[i] == "id" && keys[j] != "id" })
-	for _, k := range keys {
-		if _, overridden := entry[k]; overridden {
-			continue
+func mergeCollection(list []any, entries map[string]any, spec CollectionSpec) ([]any, error) {
+	for _, key := range sortedKeys(entries) {
+		pos := -1
+		for i, it := range list {
+			if item, ok := it.(map[string]any); ok && spec.Key(item) == key {
+				pos = i
+				break
+			}
 		}
-		n.Content = append(n.Content, keyNode(k), valueNode(identity[k]))
-	}
-	appendFields(n, entry)
-	return n
-}
-
-func keyNode(k string) *yaml.Node {
-	return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: k}
-}
-
-func appendFields(n *yaml.Node, fields map[string]any) {
-	for _, k := range sortedKeys(fields) {
-		if fields[k] == nil {
-			continue
+		switch e := entries[key].(type) {
+		case nil:
+			if pos >= 0 {
+				list = append(list[:pos:pos], list[pos+1:]...)
+			}
+		case map[string]any:
+			if pos >= 0 {
+				if err := mergeMap(list[pos].(map[string]any), e, nil); err != nil {
+					return nil, err
+				}
+				continue
+			}
+			item := spec.Identity(key)
+			for k, v := range e {
+				if v != nil {
+					item[k] = clean(v)
+				}
+			}
+			list = append(list, item)
+		default:
+			return nil, fmt.Errorf("item %q: patch must be an object or null", key)
 		}
-		n.Content = append(n.Content, keyNode(k), valueNode(fields[k]))
 	}
+	return list, nil
 }
 
-// valueNode builds a fresh node for a JSON-decoded value, dropping nulls
-// inside maps.
-func valueNode(v any) *yaml.Node {
+// clean returns v with nulls dropped from maps and whole-number floats
+// converted to ints, without modifying v.
+func clean(v any) any {
 	switch t := v.(type) {
 	case map[string]any:
-		n := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
-		appendFields(n, t)
-		return n
-	case []any:
-		n := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
-		for _, e := range t {
-			n.Content = append(n.Content, valueNode(e))
+		out := make(map[string]any, len(t))
+		for k, e := range t {
+			if e != nil {
+				out[k] = clean(e)
+			}
 		}
-		return n
+		return out
+	case []any:
+		out := make([]any, len(t))
+		for i, e := range t {
+			out[i] = clean(e)
+		}
+		return out
 	case float64:
 		if t == math.Trunc(t) && math.Abs(t) < 1e15 {
-			return valueNode(int64(t))
+			return int(t)
 		}
 	}
-	n := &yaml.Node{}
-	if err := n.Encode(v); err != nil {
-		// Unencodable values cannot occur for JSON-decoded input; fall back
-		// to their textual form rather than panic.
-		return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: fmt.Sprint(v)}
-	}
-	return n
-}
-
-// replaceValue returns the node that should replace old for new value v. A
-// scalar replacing a scalar keeps the old comments and quoting style.
-func replaceValue(old *yaml.Node, v any) *yaml.Node {
-	n := valueNode(v)
-	if old.Kind == yaml.ScalarNode && n.Kind == yaml.ScalarNode {
-		n.HeadComment, n.LineComment, n.FootComment = old.HeadComment, old.LineComment, old.FootComment
-		if _, isStr := v.(string); isStr && (old.Style&yaml.DoubleQuotedStyle != 0 || old.Style&yaml.SingleQuotedStyle != 0) {
-			n.Style = old.Style & (yaml.DoubleQuotedStyle | yaml.SingleQuotedStyle)
-		}
-	}
-	return n
+	return v
 }

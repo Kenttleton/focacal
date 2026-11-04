@@ -7,8 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
-
-	"go.yaml.in/yaml/v3"
 )
 
 // renameFile is a test seam for os.Rename.
@@ -31,14 +29,15 @@ func NewWriterMode(path string, perm os.FileMode) *Writer {
 	return &Writer{path: path, perm: perm}
 }
 
-// Update parses the file (a missing or empty file is an empty mapping), calls
-// fn, and writes the result. If fn errors the file is left untouched. Comments
-// are preserved because the yaml.Node tree is re-encoded.
+// Update reads the file's current bytes (a missing file reads as empty), calls
+// fn, and writes the bytes fn returns. If fn errors the file is left
+// untouched. The bytes are read under the lock on every call, so an external
+// edit between two Updates is seen by the second.
 //
 // The write goes to a temp file in the same directory followed by a rename.
 // When rename fails (e.g. EBUSY on a single-file Docker bind mount), the
 // previous bytes are saved to <path>.bak and the file is rewritten in place.
-func (w *Writer) Update(fn func(doc *yaml.Node) error) error {
+func (w *Writer) Update(fn func(cur []byte) (next []byte, err error)) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
@@ -55,34 +54,12 @@ func (w *Writer) Update(fn func(doc *yaml.Node) error) error {
 		mode = st.Mode().Perm()
 	}
 
-	var doc yaml.Node
-	if len(bytes.TrimSpace(data)) > 0 {
-		if err := yaml.Unmarshal(data, &doc); err != nil {
-			return fmt.Errorf("parse config %s: %w", w.path, err)
-		}
-	}
-	if doc.Kind == 0 {
-		doc = yaml.Node{Kind: yaml.DocumentNode}
-	}
-	if len(doc.Content) == 0 {
-		doc.Content = []*yaml.Node{{Kind: yaml.MappingNode}}
-	}
-
-	if err := fn(&doc); err != nil {
+	next, err := fn(bytes.Clone(data))
+	if err != nil {
 		return err
 	}
 
-	var buf bytes.Buffer
-	enc := yaml.NewEncoder(&buf)
-	enc.SetIndent(2)
-	if err := enc.Encode(&doc); err != nil {
-		return fmt.Errorf("encode config %s: %w", w.path, err)
-	}
-	if err := enc.Close(); err != nil {
-		return fmt.Errorf("encode config %s: %w", w.path, err)
-	}
-
-	tmpName, err := w.writeTemp(buf.Bytes(), mode)
+	tmpName, err := w.writeTemp(next, mode)
 	if err != nil {
 		// Temp stage failed: the target is untouched, so do not fall back.
 		return fmt.Errorf("write temp config for %s: %w", w.path, err)
@@ -92,7 +69,7 @@ func (w *Writer) Update(fn func(doc *yaml.Node) error) error {
 		return nil
 	}
 	os.Remove(tmpName)
-	return w.writeInPlace(buf.Bytes(), data, existed, mode, renameErr)
+	return w.writeInPlace(next, data, existed, mode, renameErr)
 }
 
 // writeTemp writes b to a same-directory temp file and fsyncs it, returning

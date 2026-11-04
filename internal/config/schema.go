@@ -87,32 +87,32 @@ type AgentConfig struct {
 
 // SourceConfig describes a single calendar account (Google, Outlook, CalDAV, ICS).
 type SourceConfig struct {
-	ID              string         `json:"id" yaml:"id"`                             // unique slug, e.g. "work-google"
-	Label           string         `json:"label" yaml:"label"`                       // free-text display name
-	Type            string         `json:"type" yaml:"type"`                         // google | outlook | caldav | ics
-	CredentialsFile string         `json:"credentials_file" yaml:"credentials_file"` // path inside container
-	TokenFile       string         `json:"token_file" yaml:"token_file"`             // path inside container (runtime)
-	CalendarIDs     []string       `json:"calendar_ids" yaml:"calendar_ids"`         // empty = all/primary
-	Conflicts       ConflictConfig `json:"conflicts" yaml:"conflicts"`
+	ID              string         `json:"id" yaml:"id"`                                       // unique slug, e.g. "work-google"
+	Label           string         `json:"label" yaml:"label,omitempty"`                       // free-text display name
+	Type            string         `json:"type" yaml:"type"`                                   // google | outlook | caldav | ics
+	CredentialsFile string         `json:"credentials_file" yaml:"credentials_file,omitempty"` // path inside container
+	TokenFile       string         `json:"token_file" yaml:"token_file,omitempty"`             // path inside container (runtime)
+	CalendarIDs     []string       `json:"calendar_ids" yaml:"calendar_ids,omitempty"`         // empty = all/primary
+	Conflicts       ConflictConfig `json:"conflicts" yaml:"conflicts,omitempty"`
 
 	// CalDAV-specific fields (type: caldav)
-	CalDAVURL string `json:"caldav_url" yaml:"caldav_url"` // e.g. https://caldav.icloud.com
-	Username  string `json:"username" yaml:"username"`     // Basic Auth (iCloud: Apple ID email)
-	Password  string `json:"password" yaml:"password"`     // Basic Auth password or app-specific password
-	AuthType  string `json:"auth_type" yaml:"auth_type"`   // basic (default) | bearer
+	CalDAVURL string `json:"caldav_url" yaml:"caldav_url,omitempty"` // e.g. https://caldav.icloud.com
+	Username  string `json:"username" yaml:"username,omitempty"`     // Basic Auth (iCloud: Apple ID email)
+	Password  string `json:"password" yaml:"password,omitempty"`     // Basic Auth password or app-specific password
+	AuthType  string `json:"auth_type" yaml:"auth_type,omitempty"`   // basic (default) | bearer
 
 	// ICS-specific fields (type: ics)
-	ICSURL    string `json:"ics_url" yaml:"ics_url"`         // secret feed URL
-	ICSURLEnv string `json:"ics_url_env" yaml:"ics_url_env"` // env var holding the feed URL
+	ICSURL    string `json:"ics_url" yaml:"ics_url,omitempty"`         // secret feed URL
+	ICSURLEnv string `json:"ics_url_env" yaml:"ics_url_env,omitempty"` // env var holding the feed URL
 }
 
 // ConflictConfig holds per-source switches for what counts as a conflict.
 // Nil means the documented default.
 type ConflictConfig struct {
-	Declined  *bool `json:"declined" yaml:"declined"`
-	Tentative *bool `json:"tentative" yaml:"tentative"`
-	Free      *bool `json:"free" yaml:"free"`
-	AllDay    *bool `json:"all_day" yaml:"all_day"`
+	Declined  *bool `json:"declined" yaml:"declined,omitempty"`
+	Tentative *bool `json:"tentative" yaml:"tentative,omitempty"`
+	Free      *bool `json:"free" yaml:"free,omitempty"`
+	AllDay    *bool `json:"all_day" yaml:"all_day,omitempty"`
 }
 
 func (c ConflictConfig) CountsDeclined() bool {
@@ -146,24 +146,24 @@ func (c ConflictConfig) CountsAllDay() bool {
 // DestinationConfig describes an output destination calendar.
 type DestinationConfig struct {
 	ID              string              `json:"id" yaml:"id"`
-	CalendarID      string              `json:"calendar_id" yaml:"calendar_id"`
+	CalendarID      string              `json:"calendar_id" yaml:"calendar_id,omitempty"`
 	Type            string              `json:"type" yaml:"type"` // export-only connection type
-	CredentialsFile string              `json:"credentials_file" yaml:"credentials_file"`
-	TokenFile       string              `json:"token_file" yaml:"token_file"`
-	CalDAVURL       string              `json:"caldav_url" yaml:"caldav_url"`
-	Username        string              `json:"username" yaml:"username"`
-	Password        string              `json:"password" yaml:"password"`
-	AuthType        string              `json:"auth_type" yaml:"auth_type"`
-	ICSURL          string              `json:"ics_url" yaml:"ics_url"`
-	ICSURLEnv       string              `json:"ics_url_env" yaml:"ics_url_env"`
-	CalendarIDs     []string            `json:"calendar_ids" yaml:"calendar_ids"`
-	Sources         []DestinationSource `json:"sources" yaml:"sources"`
+	CredentialsFile string              `json:"credentials_file" yaml:"credentials_file,omitempty"`
+	TokenFile       string              `json:"token_file" yaml:"token_file,omitempty"`
+	CalDAVURL       string              `json:"caldav_url" yaml:"caldav_url,omitempty"`
+	Username        string              `json:"username" yaml:"username,omitempty"`
+	Password        string              `json:"password" yaml:"password,omitempty"`
+	AuthType        string              `json:"auth_type" yaml:"auth_type,omitempty"`
+	ICSURL          string              `json:"ics_url" yaml:"ics_url,omitempty"`
+	ICSURLEnv       string              `json:"ics_url_env" yaml:"ics_url_env,omitempty"`
+	CalendarIDs     []string            `json:"calendar_ids" yaml:"calendar_ids,omitempty"`
+	Sources         []DestinationSource `json:"sources" yaml:"sources,omitempty"`
 }
 
 // DestinationSource refers to an input calendar (or focacal) shown in a destination.
 type DestinationSource struct {
 	ID         string          `json:"id" yaml:"id"`
-	CalendarID string          `json:"calendar_id" yaml:"calendar_id"`
+	CalendarID string          `json:"calendar_id" yaml:"calendar_id,omitempty"`
 	Event      EventVisibility `json:"event" yaml:"event"`
 }
 
@@ -176,7 +176,7 @@ type EventVisibility struct {
 // FieldVisibility controls whether and how a field is shown.
 type FieldVisibility struct {
 	Visibility bool   `json:"visibility" yaml:"visibility"`
-	Rename     string `json:"rename" yaml:"rename"`
+	Rename     string `json:"rename" yaml:"rename,omitempty"`
 }
 
 // EffectiveCalendarIDs returns the declared list, or the type default when empty.

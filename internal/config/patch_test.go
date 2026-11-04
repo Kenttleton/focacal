@@ -1,120 +1,109 @@
 package config
 
 import (
-	"bytes"
-	"strings"
+	"reflect"
 	"testing"
 
 	"go.yaml.in/yaml/v3"
 )
 
-func parseDoc(t *testing.T, src string) *yaml.Node {
+func parseMap(t *testing.T, src string) map[string]any {
 	t.Helper()
-	var doc yaml.Node
-	if err := yaml.Unmarshal([]byte(src), &doc); err != nil {
+	m := map[string]any{}
+	if err := yaml.Unmarshal([]byte(src), &m); err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	return &doc
-}
-
-func encodeDoc(t *testing.T, doc *yaml.Node) string {
-	t.Helper()
-	var buf bytes.Buffer
-	enc := yaml.NewEncoder(&buf)
-	enc.SetIndent(2)
-	if err := enc.Encode(doc); err != nil {
-		t.Fatalf("encode: %v", err)
+	if m == nil {
+		m = map[string]any{}
 	}
-	_ = enc.Close()
-	return buf.String()
+	return m
 }
 
-func patchYAML(t *testing.T, src string, patch map[string]any, c map[string]CollectionSpec) string {
+// patchMap applies patch to the document src and returns the result.
+func patchMap(t *testing.T, src map[string]any, patch map[string]any, c map[string]CollectionSpec) map[string]any {
 	t.Helper()
-	doc := parseDoc(t, src)
-	if err := ApplyMergePatch(doc, patch, c); err != nil {
+	if err := ApplyMergePatch(src, patch, c); err != nil {
 		t.Fatalf("ApplyMergePatch: %v", err)
 	}
-	return encodeDoc(t, doc)
+	return src
 }
 
-func expectYAML(t *testing.T, got, want string) {
+func expectMap(t *testing.T, got map[string]any, wantYAML string) {
 	t.Helper()
-	if got != want {
-		t.Errorf("yaml mismatch\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	want := parseMap(t, wantYAML)
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("mismatch\n--- got ---\n%#v\n--- want ---\n%#v", got, want)
 	}
 }
 
 var testCollections = map[string]CollectionSpec{"sources": SourcesSpec, "destinations": DestinationsSpec}
 
-func TestPatchKeepsCommentsOnUntouchedKeys(t *testing.T) {
-	src := "working_hours:\n  start: \"09:00\" # morning\n  end: \"17:00\"\n"
-	got := patchYAML(t, src, map[string]any{"working_hours": map[string]any{"end": "18:00"}}, nil)
-	expectYAML(t, got, "working_hours:\n  start: \"09:00\" # morning\n  end: \"18:00\"\n")
+func TestPatchScalarReplaceKeepsSiblings(t *testing.T) {
+	got := patchMap(t, parseMap(t, "working_hours:\n  start: \"09:00\"\n  end: \"17:00\"\n"),
+		map[string]any{"working_hours": map[string]any{"end": "18:00"}}, nil)
+	expectMap(t, got, "working_hours:\n  start: \"09:00\"\n  end: \"18:00\"\n")
 }
 
 func TestPatchKeepsUnknownKeys(t *testing.T) {
-	src := "# top\nollama:\n  # custom\n  host: localhost   # keep\n  extra: [1, 2]\nlookahead_days: 7\n"
-	got := patchYAML(t, src, map[string]any{"lookahead_days": float64(14)}, nil)
-	expectYAML(t, got, "# top\nollama:\n  # custom\n  host: localhost # keep\n  extra: [1, 2]\nlookahead_days: 14\n")
+	src := "ollama:\n  host: localhost\n  extra: [1, 2]\nlookahead_days: 7\n"
+	got := patchMap(t, parseMap(t, src), map[string]any{"lookahead_days": float64(14)}, nil)
+	expectMap(t, got, "ollama:\n  host: localhost\n  extra: [1, 2]\nlookahead_days: 14\n")
 }
 
 func TestPatchNullDeletesScalar(t *testing.T) {
-	src := "a: 1\nb: 2\nc: 3\n"
-	got := patchYAML(t, src, map[string]any{"b": nil, "missing": nil}, nil)
-	expectYAML(t, got, "a: 1\nc: 3\n")
+	got := patchMap(t, parseMap(t, "a: 1\nb: 2\nc: 3\n"), map[string]any{"b": nil, "missing": nil}, nil)
+	expectMap(t, got, "a: 1\nc: 3\n")
 }
 
 func TestPatchCollectionAddEditDelete(t *testing.T) {
 	src := "sources:\n  - id: a\n    label: Old\n  - id: b\n    label: Gone\n  - id: c\n    label: Keep\n"
-	got := patchYAML(t, src, map[string]any{"sources": map[string]any{
+	got := patchMap(t, parseMap(t, src), map[string]any{"sources": map[string]any{
 		"a": map[string]any{"label": "X"},
 		"b": nil,
 	}}, testCollections)
-	expectYAML(t, got, "sources:\n  - id: a\n    label: X\n  - id: c\n    label: Keep\n")
+	expectMap(t, got, "sources:\n  - id: a\n    label: X\n  - id: c\n    label: Keep\n")
 }
 
 func TestPatchNewCollectionItemAppended(t *testing.T) {
 	src := "sources:\n  - id: a\n    label: A\n"
-	got := patchYAML(t, src, map[string]any{"sources": map[string]any{
+	got := patchMap(t, parseMap(t, src), map[string]any{"sources": map[string]any{
 		"z": map[string]any{"label": "Z"},
 		"m": map[string]any{"label": "M", "gone": nil},
 		"q": nil,
 	}}, testCollections)
-	expectYAML(t, got, "sources:\n  - id: a\n    label: A\n  - id: m\n    label: M\n  - id: z\n    label: Z\n")
+	expectMap(t, got, "sources:\n  - id: a\n    label: A\n  - id: m\n    label: M\n  - id: z\n    label: Z\n")
 }
 
-func TestPatchPreservesNestedCommentsInEditedItem(t *testing.T) {
-	src := "sources:\n  - id: a\n    # the label\n    label: Old # inline\n    color: red   # keep me\n"
-	got := patchYAML(t, src, map[string]any{"sources": map[string]any{
-		"a": map[string]any{"label": "New"},
+func TestPatchEditedItemKeepsOtherFields(t *testing.T) {
+	src := "sources:\n  - id: a\n    label: Old\n    color: red\n    nested:\n      x: 1\n      y: 2\n"
+	got := patchMap(t, parseMap(t, src), map[string]any{"sources": map[string]any{
+		"a": map[string]any{"label": "New", "nested": map[string]any{"y": float64(3), "x": nil}},
 	}}, testCollections)
-	expectYAML(t, got, "sources:\n  - id: a\n    # the label\n    label: New # inline\n    color: red # keep me\n")
+	expectMap(t, got, "sources:\n  - id: a\n    label: New\n    color: red\n    nested:\n      y: 3\n")
 }
 
 func TestPatchWholeNumberFloatWritesInteger(t *testing.T) {
-	got := patchYAML(t, "a: 1\n", map[string]any{"a": float64(60), "b": float64(1.5), "c": []any{float64(1), "x"}}, nil)
-	expectYAML(t, got, "a: 60\nb: 1.5\nc:\n  - 1\n  - x\n")
+	got := patchMap(t, parseMap(t, "a: 1\n"),
+		map[string]any{"a": float64(60), "b": float64(1.5), "c": []any{float64(1), "x"}}, nil)
+	expectMap(t, got, "a: 60\nb: 1.5\nc:\n  - 1\n  - x\n")
 }
 
-func TestPatchQuotedStringKeepsQuotes(t *testing.T) {
-	src := "a: \"x\"\nb: 'y'\nc: plain\n"
-	got := patchYAML(t, src, map[string]any{"a": "p", "b": "q", "c": "r"}, nil)
-	expectYAML(t, got, "a: \"p\"\nb: 'q'\nc: r\n")
+func TestPatchStringReplacesString(t *testing.T) {
+	got := patchMap(t, parseMap(t, "a: \"x\"\nb: 'y'\nc: plain\n"), map[string]any{"a": "p", "b": "q", "c": "r"}, nil)
+	expectMap(t, got, "a: p\nb: q\nc: r\n")
 }
 
 func TestPatchDestinationKeyCreatesIdentityFields(t *testing.T) {
-	src := "destinations: []\n"
-	got := patchYAML(t, src, map[string]any{"destinations": map[string]any{
+	doc := patchMap(t, parseMap(t, "destinations: []\n"), map[string]any{"destinations": map[string]any{
 		DestinationKey("g1", "cal@x"): map[string]any{"sources": []any{"a", "b"}},
 	}}, testCollections)
-	expectYAML(t, got, "destinations:\n  - id: g1\n    calendar_id: cal@x\n    sources:\n      - a\n      - b\n")
+	expectMap(t, doc, "destinations:\n  - id: g1\n    calendar_id: cal@x\n    sources:\n      - a\n      - b\n")
 
 	// Existing item matched by composite key; nested list replaced wholesale.
-	got = patchYAML(t, got, map[string]any{"destinations": map[string]any{
+	doc = patchMap(t, doc, map[string]any{"destinations": map[string]any{
 		"g1|cal@x": map[string]any{"sources": []any{"c"}},
 	}}, testCollections)
-	expectYAML(t, got, "destinations:\n  - id: g1\n    calendar_id: cal@x\n    sources:\n      - c\n")
+	expectMap(t, doc, "destinations:\n  - id: g1\n    calendar_id: cal@x\n    sources:\n      - c\n")
 
 	if DestinationKey("a", "b") != "a|b" {
 		t.Error("DestinationKey format")
@@ -127,36 +116,37 @@ func TestPatchDestinationKeyCreatesIdentityFields(t *testing.T) {
 	}
 }
 
-func TestPatchRootNotMappingErrors(t *testing.T) {
-	doc := parseDoc(t, "- a\n- b\n")
-	err := ApplyMergePatch(doc, map[string]any{"a": "b"}, nil)
-	if err == nil || !strings.Contains(err.Error(), "mapping") {
-		t.Fatalf("want mapping error, got %v", err)
+func TestPatchCollectionNotAListErrors(t *testing.T) {
+	err := ApplyMergePatch(parseMap(t, "sources: nope\n"), map[string]any{"sources": map[string]any{
+		"a": map[string]any{"label": "A"},
+	}}, testCollections)
+	if err == nil {
+		t.Fatal("want error for a non-list collection")
+	}
+	err = ApplyMergePatch(map[string]any{}, map[string]any{"sources": "x"}, testCollections)
+	if err == nil {
+		t.Fatal("want error for a non-object collection patch")
 	}
 }
 
 func TestPatchAbsentCollectionCreated(t *testing.T) {
-	got := patchYAML(t, "a: 1\n", map[string]any{"sources": map[string]any{
+	got := patchMap(t, parseMap(t, "a: 1\n"), map[string]any{"sources": map[string]any{
 		"s1": map[string]any{"label": "One"},
 	}}, testCollections)
-	expectYAML(t, got, "a: 1\nsources:\n  - id: s1\n    label: One\n")
+	expectMap(t, got, "a: 1\nsources:\n  - id: s1\n    label: One\n")
 
 	// Null deletes the whole collection; emptying leaves [].
-	got = patchYAML(t, got, map[string]any{"sources": map[string]any{"s1": nil}}, testCollections)
-	expectYAML(t, got, "a: 1\nsources: []\n")
-	got = patchYAML(t, got, map[string]any{"sources": nil}, testCollections)
-	expectYAML(t, got, "a: 1\n")
+	got = patchMap(t, got, map[string]any{"sources": map[string]any{"s1": nil}}, testCollections)
+	expectMap(t, got, "a: 1\nsources: []\n")
+	got = patchMap(t, got, map[string]any{"sources": nil}, testCollections)
+	expectMap(t, got, "a: 1\n")
 }
 
-func TestPatchDeleteFirstKeyKeepsHeaderComment(t *testing.T) {
-	got := patchYAML(t, "# top\na: 1\nb: 2\n", map[string]any{"a": nil}, nil)
-	expectYAML(t, got, "# top\nb: 2\n")
-
-	// A middle key's own comment goes with it.
-	got = patchYAML(t, "a: 1\n# about b\nb: 2\nc: 3\n", map[string]any{"b": nil}, nil)
-	expectYAML(t, got, "a: 1\nc: 3\n")
-
-	// Only key: comment is moved to the mapping.
-	got = patchYAML(t, "# top\na: 1\n", map[string]any{"a": nil}, nil)
-	expectYAML(t, got, "# top\n{}\n")
+func TestPatchDeleteFirstAndOnlyKey(t *testing.T) {
+	got := patchMap(t, parseMap(t, "a: 1\nb: 2\n"), map[string]any{"a": nil}, nil)
+	expectMap(t, got, "b: 2\n")
+	got = patchMap(t, parseMap(t, "a: 1\n"), map[string]any{"a": nil}, nil)
+	if len(got) != 0 {
+		t.Errorf("want empty doc, got %v", got)
+	}
 }

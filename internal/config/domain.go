@@ -1,8 +1,12 @@
 package config
 
 import (
+	"bytes"
 	"errors"
+	"fmt"
 	"reflect"
+
+	"go.yaml.in/yaml/v3"
 )
 
 // Domain names one of the three portable configuration domains. Each domain
@@ -48,15 +52,15 @@ type domainKey struct {
 // appAuth is the part of auth that belongs to the App domain. Login
 // credentials (username, password_hash) live in credentials.yaml.
 type appAuth struct {
-	Enabled bool `json:"enabled"`
+	Enabled bool `json:"enabled" yaml:"enabled"`
 }
 
 // plannerAgent is AgentConfig without its api_key, which belongs in .env.
 type plannerAgent struct {
-	BaseURL     string `json:"base_url"`
-	Model       string `json:"model"`
-	TimeoutSecs int    `json:"timeout_secs"`
-	MaxTokens   int    `json:"max_tokens"`
+	BaseURL     string `json:"base_url" yaml:"base_url"`
+	Model       string `json:"model" yaml:"model"`
+	TimeoutSecs int    `json:"timeout_secs" yaml:"timeout_secs"`
+	MaxTokens   int    `json:"max_tokens" yaml:"max_tokens"`
 }
 
 var domainKeys = map[Domain][]domainKey{
@@ -117,4 +121,34 @@ func (d Domain) validate(c *Config) error {
 		return c.ValidateCalendars()
 	}
 	return ErrUnknownDomain
+}
+
+// marshalDomain renders exactly d's keys of c as YAML, in domainKeys order,
+// collections as lists in their existing order. The output is deterministic
+// (map-typed values such as colors are sorted by yaml) and carries no
+// comments. Secrets that live outside the domain file (the planner api_key)
+// are not part of d's keys and so never written.
+func marshalDomain(d Domain, c *Config) ([]byte, error) {
+	if !d.Valid() {
+		return nil, fmt.Errorf("%w: %q", ErrUnknownDomain, d)
+	}
+	root := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+	for _, dk := range domainKeys[d] {
+		var v yaml.Node
+		if err := v.Encode(dk.get(c)); err != nil {
+			return nil, fmt.Errorf("encode %s: %w", dk.name, err)
+		}
+		root.Content = append(root.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: dk.name}, &v)
+	}
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+	if err := enc.Encode(root); err != nil {
+		return nil, fmt.Errorf("encode %s: %w", d.File(), err)
+	}
+	if err := enc.Close(); err != nil {
+		return nil, fmt.Errorf("encode %s: %w", d.File(), err)
+	}
+	return buf.Bytes(), nil
 }

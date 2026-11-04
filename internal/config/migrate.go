@@ -187,7 +187,7 @@ func MigrateLegacy(dir string) (migrated bool, err error) {
 			continue
 		}
 		b := out[d]
-		err := NewWriter(filepath.Join(dir, d.File())).Update(func(doc *yaml.Node) error {
+		err := updateNodes(NewWriter(filepath.Join(dir, d.File())), func(doc *yaml.Node) error {
 			var merged yaml.Node
 			if err := yaml.Unmarshal(b, &merged); err != nil {
 				return err
@@ -199,7 +199,7 @@ func MigrateLegacy(dir string) (migrated bool, err error) {
 			return false, fmt.Errorf("migrate: merge into %s (the next start resumes): %w", d.File(), err)
 		}
 	}
-	err = NewWriter(appPath).Update(func(d *yaml.Node) error {
+	err = updateNodes(NewWriter(appPath), func(d *yaml.Node) error {
 		var trimmed yaml.Node
 		if err := yaml.Unmarshal(out[DomainApp], &trimmed); err != nil {
 			return err
@@ -474,4 +474,65 @@ func joinComments(a, b string) string {
 		return parts[0]
 	}
 	return ""
+}
+
+// updateNodes edits w's file as a yaml.Node document, so comments and key
+// order survive. A missing or empty file is an empty mapping. MigrateLegacy
+// and SaveCredentials use it; domain patches go through maps instead.
+func updateNodes(w *Writer, fn func(doc *yaml.Node) error) error {
+	return w.Update(func(cur []byte) ([]byte, error) {
+		var doc yaml.Node
+		if len(bytes.TrimSpace(cur)) > 0 {
+			if err := yaml.Unmarshal(cur, &doc); err != nil {
+				return nil, fmt.Errorf("parse config %s: %w", w.path, err)
+			}
+		}
+		if doc.Kind == 0 {
+			doc = yaml.Node{Kind: yaml.DocumentNode}
+		}
+		if len(doc.Content) == 0 {
+			doc.Content = []*yaml.Node{{Kind: yaml.MappingNode}}
+		}
+		if err := fn(&doc); err != nil {
+			return nil, err
+		}
+		out, err := encodeYAML(&doc)
+		if err != nil {
+			return nil, fmt.Errorf("encode config %s: %w", w.path, err)
+		}
+		return out, nil
+	})
+}
+
+// findKey returns the index of key's value node in mapping m, or -1.
+func findKey(m *yaml.Node, key string) int {
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value == key {
+			return i + 1
+		}
+	}
+	return -1
+}
+
+// removePair deletes the key/value pair whose value is at valIdx. When the
+// first pair is removed its head comment is usually a file or section header,
+// so it is handed to the next key (or to the mapping if none remains).
+func removePair(m *yaml.Node, valIdx int) {
+	if valIdx == 1 {
+		if hc := m.Content[0].HeadComment; hc != "" {
+			if len(m.Content) > 2 {
+				next := m.Content[2]
+				if next.HeadComment != "" {
+					hc += "\n\n" + next.HeadComment
+				}
+				next.HeadComment = hc
+			} else {
+				if m.HeadComment != "" {
+					hc += "\n\n" + m.HeadComment
+				}
+				m.HeadComment = hc
+			}
+		}
+	}
+	m.Content = append(m.Content[:valIdx-1], m.Content[valIdx+1:]...)
 }

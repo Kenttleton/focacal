@@ -12,11 +12,11 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
-func addKey(doc *yaml.Node, key, val string) {
-	root := doc.Content[0]
-	root.Content = append(root.Content,
-		&yaml.Node{Kind: yaml.ScalarNode, Value: key},
-		&yaml.Node{Kind: yaml.ScalarNode, Value: val})
+// appendLine returns a fn for Update that appends "key: val".
+func appendLine(key, val string) func([]byte) ([]byte, error) {
+	return func(cur []byte) ([]byte, error) {
+		return append(append([]byte{}, cur...), []byte(key+": "+val+"\n")...), nil
+	}
 }
 
 func writeTemp(t *testing.T, content string, mode os.FileMode) string {
@@ -34,9 +34,8 @@ func writeTemp(t *testing.T, content string, mode os.FileMode) string {
 func TestUpdateIsAtomic(t *testing.T) {
 	p := writeTemp(t, "# keep\na: 1\n", 0644)
 	before, _ := os.ReadFile(p)
-	err := NewWriter(p).Update(func(doc *yaml.Node) error {
-		addKey(doc, "b", "2")
-		return fmt.Errorf("boom")
+	err := NewWriter(p).Update(func(cur []byte) ([]byte, error) {
+		return append(cur, "b: 2\n"...), fmt.Errorf("boom")
 	})
 	if err == nil {
 		t.Fatal("expected error")
@@ -53,10 +52,7 @@ func TestUpdateIsAtomic(t *testing.T) {
 
 func TestUpdatePreservesMode(t *testing.T) {
 	p := writeTemp(t, "a: 1\n", 0600)
-	if err := NewWriter(p).Update(func(doc *yaml.Node) error {
-		addKey(doc, "b", "2")
-		return nil
-	}); err != nil {
+	if err := NewWriter(p).Update(appendLine("b", "2")); err != nil {
 		t.Fatal(err)
 	}
 	st, _ := os.Stat(p)
@@ -65,17 +61,35 @@ func TestUpdatePreservesMode(t *testing.T) {
 	}
 }
 
-func TestUpdatePreservesComments(t *testing.T) {
+func TestUpdateWritesFnBytesVerbatim(t *testing.T) {
 	p := writeTemp(t, "# top comment\na: 1 # inline\n", 0644)
-	if err := NewWriter(p).Update(func(doc *yaml.Node) error {
-		addKey(doc, "b", "2")
-		return nil
-	}); err != nil {
+	if err := NewWriter(p).Update(appendLine("b", "2")); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := os.ReadFile(p)
-	if !bytes.Contains(got, []byte("# top comment")) || !bytes.Contains(got, []byte("# inline")) || !bytes.Contains(got, []byte("b: 2")) {
+	if string(got) != "# top comment\na: 1 # inline\nb: 2\n" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+func TestWriterUpdateSeesDiskState(t *testing.T) {
+	p := writeTemp(t, "a: 1\n", 0644)
+	w := NewWriter(p)
+	if err := w.Update(appendLine("b", "2")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte("external: yes\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	var seen string
+	if err := w.Update(func(cur []byte) ([]byte, error) {
+		seen = string(cur)
+		return cur, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if seen != "external: yes\n" {
+		t.Fatalf("second Update saw %q", seen)
 	}
 }
 
@@ -85,10 +99,7 @@ func TestUpdateFallsBackWhenRenameFails(t *testing.T) {
 	renameFile = func(string, string) error { return syscall.EBUSY }
 	defer func() { renameFile = orig }()
 
-	if err := NewWriter(p).Update(func(doc *yaml.Node) error {
-		addKey(doc, "b", "2")
-		return nil
-	}); err != nil {
+	if err := NewWriter(p).Update(appendLine("b", "2")); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := os.ReadFile(p)
@@ -110,7 +121,7 @@ func TestUpdateFallsBackWhenRenameFails(t *testing.T) {
 
 func TestUpdateNoBakOnRenameSuccess(t *testing.T) {
 	p := writeTemp(t, "a: 1\n", 0644)
-	if err := NewWriter(p).Update(func(doc *yaml.Node) error { return nil }); err != nil {
+	if err := NewWriter(p).Update(func(cur []byte) ([]byte, error) { return cur, nil }); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(p + ".bak"); !os.IsNotExist(err) {
@@ -126,10 +137,7 @@ func TestUpdateSerializesConcurrentCallers(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			if err := w.Update(func(doc *yaml.Node) error {
-				addKey(doc, fmt.Sprintf("k%d", i), "v")
-				return nil
-			}); err != nil {
+			if err := w.Update(appendLine(fmt.Sprintf("k%d", i), "v")); err != nil {
 				t.Error(err)
 			}
 		}(i)
@@ -149,10 +157,7 @@ func TestUpdateSerializesConcurrentCallers(t *testing.T) {
 
 func TestUpdateCreatesMissingFileWithMode(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "new.yaml")
-	if err := NewWriterMode(p, 0600).Update(func(doc *yaml.Node) error {
-		addKey(doc, "a", "1")
-		return nil
-	}); err != nil {
+	if err := NewWriterMode(p, 0600).Update(appendLine("a", "1")); err != nil {
 		t.Fatal(err)
 	}
 	st, err := os.Stat(p)
@@ -168,21 +173,17 @@ func TestUpdateCreatesMissingFileWithMode(t *testing.T) {
 	}
 }
 
-func TestUpdateOnEmptyFileGivesEmptyMapping(t *testing.T) {
-	p := writeTemp(t, "", 0644)
-	var kind yaml.Kind
-	var childKind yaml.Kind
-	if err := NewWriter(p).Update(func(doc *yaml.Node) error {
-		kind = doc.Kind
-		if len(doc.Content) == 1 {
-			childKind = doc.Content[0].Kind
-		}
-		return nil
+func TestUpdateMissingFileSeesEmptyBytes(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "nope.yaml")
+	var seen []byte = []byte("sentinel")
+	if err := NewWriter(p).Update(func(cur []byte) ([]byte, error) {
+		seen = cur
+		return []byte("a: 1\n"), nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if kind != yaml.DocumentNode || childKind != yaml.MappingNode {
-		t.Fatalf("kind=%v child=%v", kind, childKind)
+	if len(seen) != 0 {
+		t.Fatalf("missing file should read as empty, got %q", seen)
 	}
 }
 
@@ -200,10 +201,7 @@ func TestUpdateTempStageFailureDoesNotFallBack(t *testing.T) {
 	}
 	defer os.Chmod(dir, 0755)
 
-	err := NewWriter(p).Update(func(doc *yaml.Node) error {
-		addKey(doc, "b", "2")
-		return nil
-	})
+	err := NewWriter(p).Update(appendLine("b", "2"))
 	if err == nil {
 		t.Fatal("expected error")
 	}

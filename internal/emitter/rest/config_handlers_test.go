@@ -213,8 +213,8 @@ func TestPatchPlannerValid(t *testing.T) {
 	if !strings.Contains(got, `"08:30"`) && !strings.Contains(got, "08:30") {
 		t.Errorf("planner.yaml not updated:\n%s", got)
 	}
-	if !strings.Contains(got, "# leave on time") {
-		t.Errorf("comment lost:\n%s", got)
+	if strings.Contains(got, "# leave on time") {
+		t.Errorf("comments should be dropped on save:\n%s", got)
 	}
 
 	// GET now reflects the saved value.

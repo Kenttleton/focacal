@@ -58,7 +58,7 @@ func SaveCredentials(dir string, c Credentials) error {
 	if err := chmodIfExists(path); err != nil {
 		return err
 	}
-	err := NewWriterMode(path, 0600).Update(func(doc *yaml.Node) error {
+	err := updateNodes(NewWriterMode(path, 0600), func(doc *yaml.Node) error {
 		root := doc.Content[0]
 		if root.Kind != yaml.MappingNode {
 			return fmt.Errorf("credentials: top level is not a mapping")
