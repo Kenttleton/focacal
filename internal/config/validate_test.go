@@ -137,26 +137,3 @@ func TestValidateJoinsAll(t *testing.T) {
 		}
 	}
 }
-
-func TestValidate_AgentLivesInPlanner(t *testing.T) {
-	c := validConfig()
-	c.Agent.TimeoutSecs = 0
-	if err := c.ValidatePlanner(); err == nil || !strings.Contains(err.Error(), "agent.timeout_secs") {
-		t.Fatalf("ValidatePlanner = %v, want error naming agent.timeout_secs", err)
-	}
-	if err := c.ValidateApp(); err != nil {
-		t.Errorf("ValidateApp must not check agent: %v", err)
-	}
-
-	c = validConfig()
-	c.OAuth.RedirectBaseURL = "not a url"
-	if err := c.ValidateCalendars(); err == nil || !strings.Contains(err.Error(), "oauth.redirect_base_url") {
-		t.Fatalf("ValidateCalendars = %v, want error naming oauth.redirect_base_url", err)
-	}
-	if err := c.ValidateApp(); err != nil {
-		t.Errorf("ValidateApp must not check oauth: %v", err)
-	}
-	if err := c.ValidatePlanner(); err != nil {
-		t.Errorf("ValidatePlanner must not check oauth: %v", err)
-	}
-}

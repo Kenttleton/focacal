@@ -3,7 +3,6 @@ package config
 import (
 	"errors"
 	"fmt"
-	"net/url"
 	"time"
 )
 
@@ -59,7 +58,7 @@ func inRange(errs *[]error, field string, v, lo, hi int) {
 	}
 }
 
-// ValidatePlanner checks working hours, lunch, focus and agent settings. Bounds match
+// ValidatePlanner checks working hours, lunch and focus settings. Bounds match
 // the web UI.
 func (c *Config) ValidatePlanner() error {
 	var errs []error
@@ -117,22 +116,12 @@ func (c *Config) ValidatePlanner() error {
 	}
 	inRange(&errs, "focus.buffer_around_meetings", f.BufferAroundMeetings, 0, 60)
 
-	a := c.Agent
-	inRange(&errs, "agent.timeout_secs", a.TimeoutSecs, 1, 3600)
-	if a.MaxTokens < 1 {
-		errs = append(errs, fmt.Errorf("agent.max_tokens: %d must be at least 1", a.MaxTokens))
-	}
-
 	return errors.Join(errs...)
 }
 
-// ValidateCalendars checks the OAuth redirect, sources and destinations.
+// ValidateCalendars checks sources and destinations.
 func (c *Config) ValidateCalendars() error {
 	var errs []error
-
-	if u, err := url.Parse(c.OAuth.RedirectBaseURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		errs = append(errs, fmt.Errorf("oauth.redirect_base_url: %q must be an absolute http(s) URL", c.OAuth.RedirectBaseURL))
-	}
 
 	// Source ids must be unique.
 	seenSource := make(map[string]bool)

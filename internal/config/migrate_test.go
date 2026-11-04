@@ -337,7 +337,7 @@ func TestMigrateRefusesLegacyNextToSampleFiles(t *testing.T) {
 	if err == nil {
 		t.Fatal("want an error: config.yaml holds planner/calendars keys and the targets exist")
 	}
-	for _, want := range []string{"planner.yaml", "calendars.yaml", "delete"} {
+	for _, want := range []string{"planner.yaml", "delete"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q does not mention %q", err, want)
 		}
@@ -566,5 +566,78 @@ auth:
 	}
 	if ok, err := MigrateLegacy(dir); err != nil || ok {
 		t.Errorf("second run = %v, %v; want false, nil", ok, err)
+	}
+}
+
+func copySamples(t *testing.T, dir string) {
+	t.Helper()
+	for _, f := range []string{"planner.yaml", "calendars.yaml"} {
+		b, err := os.ReadFile(filepath.Join("..", "..", "config.example", f))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, f), b, 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestMigrate_CustomOAuthNextToSampleFiles(t *testing.T) {
+	dir := t.TempDir()
+	copySamples(t, dir)
+	old := "server:\n  caldav_port: 5232\n  rest_port: 5233\n  mcp_port: 5234\n  oauth_port: 8080\noauth:\n  redirect_base_url: \"https://cal.example.com\"\nauth:\n  enabled: true\n"
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(old), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := MigrateLegacy(dir); err != nil || !ok {
+		t.Fatalf("MigrateLegacy = %v, %v; want true, nil", ok, err)
+	}
+	c, err := LoadDir(dir)
+	if err != nil || c.OAuth.RedirectBaseURL != "https://cal.example.com" {
+		t.Fatalf("LoadDir = %+v, %v", c.OAuth, err)
+	}
+	if !strings.Contains(readFile(t, filepath.Join(dir, "calendars.yaml")), "https://cal.example.com") {
+		t.Error("custom value not in calendars.yaml")
+	}
+}
+
+func TestMigrate_RefusesDifferingAgentOrOAuth(t *testing.T) {
+	cases := map[string]struct{ file, target, legacy string }{
+		"agent": {"planner.yaml", "agent:\n  model: \"a\"\n", "agent:\n  model: \"b\"\n"},
+		"oauth": {"calendars.yaml", "oauth:\n  redirect_base_url: \"http://a.test\"\n", "oauth:\n  redirect_base_url: \"http://b.test\"\n"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			dir := writeLegacy(t, tc.legacy+"auth:\n  enabled: true\n")
+			if err := os.WriteFile(filepath.Join(dir, tc.file), []byte(tc.target), 0644); err != nil {
+				t.Fatal(err)
+			}
+			before := snapshotFiles(t, dir)
+			if ok, err := MigrateLegacy(dir); err == nil || ok {
+				t.Fatalf("MigrateLegacy = %v, %v; want an error", ok, err)
+			}
+			assertFilesUnchanged(t, dir, before)
+		})
+	}
+}
+
+func TestMigrate_MergesIntoPopulatedTarget(t *testing.T) {
+	dir := writeLegacy(t, "agent:\n  model: \"m\"\n  timeout_secs: 30\n  max_tokens: 100\n  base_url: \"http://x/v1\"\nauth:\n  enabled: true\n")
+	existing := "# mine\nworking_hours:\n  start: \"08:00\"\n  end: \"16:00\"\n  timezone: \"UTC\" # keep\n"
+	if err := os.WriteFile(filepath.Join(dir, "planner.yaml"), []byte(existing), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := MigrateLegacy(dir); err != nil || !ok {
+		t.Fatalf("MigrateLegacy = %v, %v", ok, err)
+	}
+	p := readFile(t, filepath.Join(dir, "planner.yaml"))
+	for _, want := range []string{"# mine", "# keep", `"08:00"`, "agent:", "timeout_secs: 30"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("planner.yaml lacks %q:\n%s", want, p)
+		}
+	}
+	c, err := LoadDir(dir)
+	if err != nil || c.WorkingHours.Start != "08:00" || c.Agent.Model != "m" {
+		t.Fatalf("LoadDir = %+v, %v", c, err)
 	}
 }

@@ -51,8 +51,8 @@ type appAuth struct {
 	Enabled bool `json:"enabled"`
 }
 
-// appAgent (the Planner domain's agent block) is AgentConfig without its api_key, which belongs in .env.
-type appAgent struct {
+// plannerAgent is AgentConfig without its api_key, which belongs in .env.
+type plannerAgent struct {
 	BaseURL     string `json:"base_url"`
 	Model       string `json:"model"`
 	TimeoutSecs int    `json:"timeout_secs"`
@@ -71,9 +71,9 @@ var domainKeys = map[Domain][]domainKey{
 		// colors is the generated-event palette keyed by event kind (spec 9.6).
 		{name: "colors", typ: reflect.TypeFor[map[string]string](), get: func(c *Config) any { return c.Colors }},
 		// agent is the scheduler endpoint; its api_key stays in .env.
-		{name: "agent", typ: reflect.TypeFor[appAgent](), get: func(c *Config) any {
+		{name: "agent", typ: reflect.TypeFor[plannerAgent](), get: func(c *Config) any {
 			a := c.Agent
-			return appAgent{BaseURL: a.BaseURL, Model: a.Model, TimeoutSecs: a.TimeoutSecs, MaxTokens: a.MaxTokens}
+			return plannerAgent{BaseURL: a.BaseURL, Model: a.Model, TimeoutSecs: a.TimeoutSecs, MaxTokens: a.MaxTokens}
 		}},
 	},
 	DomainCalendars: {

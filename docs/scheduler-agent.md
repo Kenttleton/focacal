@@ -173,4 +173,4 @@ For one-off changes ("move my 3 PM focus block to 4 PM", "add a 90-minute deep w
 export FOCACAL_AGENT_API_KEY=sk-...
 ```
 
-Viper maps `FOCACAL_AGENT_API_KEY` → `agent.api_key` automatically when the app starts.
+focacal reads `FOCACAL_AGENT_API_KEY` as an explicit override of `agent.api_key` when the app starts.

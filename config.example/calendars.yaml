@@ -15,6 +15,7 @@ sources:
     #   ics_url_env: "FOCACAL_ICS_TEAM_FEED" # feed URL lives in .env; if unset,
     #                                        # only this calendar fails to sync
 
-oauth:
-  # Also configurable via OAUTH_REDIRECT_BASE_URL env var.
-  redirect_base_url: "http://localhost:8080"
+# OAuth redirect base. Defaults shown; uncomment to change. Also configurable
+# via the OAUTH_REDIRECT_BASE_URL env var.
+# oauth:
+#   redirect_base_url: "http://localhost:8080"
