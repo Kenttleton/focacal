@@ -5,9 +5,10 @@ import (
 	"log/slog"
 	"os"
 
+	configexample "github.com/Kenttleton/focacal/config.example"
+	"github.com/Kenttleton/focacal/internal/config"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
-	"github.com/Kenttleton/focacal/internal/config"
 )
 
 // cfgFlag is the raw --config value: a config directory, or a legacy
@@ -61,10 +62,6 @@ func loadConfig(log *slog.Logger) (dir string, started, running *config.Config, 
 			return "", nil, nil, err
 		}
 	}
-	if !config.HasConfigFiles(dir) {
-		log.Warn("no config files in the config directory; starting from defaults with first-run /auth/setup open",
-			"dir", dir, "how", how)
-	}
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return "", nil, nil, fmt.Errorf("config dir %s: %w", dir, err)
 	}
@@ -76,6 +73,15 @@ func loadConfig(log *slog.Logger) (dir string, started, running *config.Config, 
 	if migrated {
 		log.Info("migrated legacy config.yaml to the directory layout; original kept as config.yaml.bak",
 			"dir", dir)
+	}
+	// Fresh instance: write the sample files that are missing. After the
+	// migration, which refuses to run next to differing domain files.
+	seeded, err := config.SeedDefaults(dir, configexample.FS)
+	if err != nil {
+		return "", nil, nil, fmt.Errorf("seed config dir %s: %w", dir, err)
+	}
+	if len(seeded) > 0 {
+		log.Info("created missing config files from defaults", "dir", dir, "files", seeded)
 	}
 	if keys := config.LegacyKeys(dir); len(keys) > 0 {
 		log.Warn("config.yaml holds keys that now live in planner.yaml / calendars.yaml and are ignored",

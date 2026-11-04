@@ -320,7 +320,7 @@ func TestMigrateRefusesWhenPlannerExists(t *testing.T) {
 func TestMigrateRefusesLegacyNextToSampleFiles(t *testing.T) {
 	dir := t.TempDir()
 	for _, f := range []string{"planner.yaml", "calendars.yaml"} {
-		b, err := os.ReadFile(filepath.Join("..", "..", "config", f))
+		b, err := os.ReadFile(filepath.Join("..", "..", "config.example", f))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -468,7 +468,7 @@ func snapshotDir(t *testing.T, dir string) map[string]string {
 // The example config/ shipped in the repo must load as-is, need no
 // migration, and hold no login secrets.
 func TestRepoConfigDirIsCleanNewLayout(t *testing.T) {
-	src := filepath.Join("..", "..", "config")
+	src := filepath.Join("..", "..", "config.example")
 	if _, err := LoadDir(src); err != nil {
 		t.Fatalf("LoadDir(config/): %v", err)
 	}

@@ -41,7 +41,8 @@ docker-compose.yml passes `.env` into the container, so ICS feed URLs referenced
 by `ics_url_env` and `FOCACAL_AGENT_API_KEY` go there too. An unset feed
 variable only stops that calendar from syncing (startup logs a warning).
 
-Edit the config directory, `config/`: working hours and timezone in
+The first start creates `config/` from the samples in `config.example/`
+(it never overwrites a file that is already there). Edit it: working hours and timezone in
 `config/planner.yaml`, calendar sources in `config/calendars.yaml`, ports and
 the scheduler agent in `config/config.yaml`. See
 [docs/config-domains.md](docs/config-domains.md) for what lives where.
@@ -50,11 +51,11 @@ the scheduler agent in `config/config.yaml`. See
 $EDITOR config/planner.yaml config/calendars.yaml
 ```
 
-Upgrading from a single `config.yaml`? Delete the sample `config/planner.yaml` and
-`config/calendars.yaml`, then move your file in
-(`rm -f config/planner.yaml config/calendars.yaml && mv config.yaml config/config.yaml`).
+Upgrading from a single `config.yaml`? Move it into the config directory
+(`mkdir -p config && mv config.yaml config/config.yaml`).
 focacal splits it into the new files on first start and keeps `config.yaml.bak`;
-it refuses to start, changing nothing, if those sample files are still there.
+it refuses to start, changing nothing, if `config/` already holds a
+`planner.yaml` or `calendars.yaml` that differs from your settings.
 If that file has a login (`auth.password_hash`), the hash moves to
 `config/credentials.yaml`. Hashes from this repository's earlier commits are
 public, so rotate the login right after upgrading (`POST /auth/reset`, or
@@ -402,7 +403,8 @@ focacal/
 ├── Dockerfile
 ├── docker-compose.yml
 ├── docker-compose.ollama.yml   # optional: Ollama in-stack
-├── config/                     # config directory (see docs/config-domains.md)
+├── config.example/             # sample config, copied to config/ on first start
+├── config/                     # live config directory, gitignored (docs/config-domains.md)
 │   ├── config.yaml             # App: servers, agent, oauth, auth switch
 │   ├── planner.yaml            # Planner: working hours, lunch, focus, colors
 │   └── calendars.yaml          # Calendars: sources, destinations

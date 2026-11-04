@@ -4,9 +4,7 @@
 .env
 .env.*
 !.env.example
-config/credentials.yaml
-config/*.bak
-config/*.json
+config/
 **/*.db
 **/*.db-shm
 **/*.db-wal

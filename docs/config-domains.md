@@ -152,9 +152,9 @@ login, which reopens first-run setup. To upgrade:
 ```bash
 docker compose down
 # take the new docker-compose.yml (mounts ./config:/data/config)
-# The repo's config/ ships sample planner.yaml and calendars.yaml: delete
-# them first, or the migration refuses to overwrite them.
-rm -f config/planner.yaml config/calendars.yaml
+# config/ is gitignored and starts empty, so the migration has nothing to
+# collide with. If you already ran the new version once, config/ holds
+# sample planner.yaml and calendars.yaml: delete those first.
 mkdir -p config && mv config.yaml config/config.yaml
 docker compose up -d     # migrates config/config.yaml on first start
 ```
