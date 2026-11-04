@@ -2,15 +2,17 @@ package cmd
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
-	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"github.com/Kenttleton/focacal/internal/config"
 )
 
-var cfgFile string
+// cfgFlag is the raw --config value: a config directory, or a legacy
+// config.yaml path (its directory is used).
+var cfgFlag string
 
 // rootCmd is the base command for the focacal CLI.
 var rootCmd = &cobra.Command{
@@ -33,42 +35,48 @@ func Execute() {
 }
 
 func init() {
-	cobra.OnInitialize(initConfig)
-	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default: /data/config.yaml)")
+	rootCmd.PersistentFlags().StringVar(&cfgFlag, "config", "",
+		"config directory, or a legacy config.yaml path (default: search /data/config, $HOME/.config/focacal, .)")
 	rootCmd.PersistentFlags().Bool("debug", false, "enable debug logging")
 	viper.BindPFlag("debug", rootCmd.PersistentFlags().Lookup("debug"))
 }
 
-// initConfig sets up viper to read config from file and environment.
-func initConfig() {
-	config.SetDefaults()
-
-	if cfgFile != "" {
-		viper.SetConfigFile(cfgFile)
-	} else {
-		// Default config path inside the Docker container.
-		viper.AddConfigPath("/data")
-		// Fallback for local development.
-		viper.AddConfigPath("$HOME/.config/focacal")
-		viper.AddConfigPath(".")
-		viper.SetConfigName("config")
-		viper.SetConfigType("yaml")
+// loadConfig resolves the config directory, migrates a legacy single-file
+// config.yaml in it, and loads it. started is env-free (for
+// config.NewService's pending_restart); running carries env overrides and is
+// what the process uses. See config.LoadStart.
+func loadConfig(log *slog.Logger) (dir string, started, running *config.Config, err error) {
+	dir, how := config.ResolveDir(cfgFlag)
+	switch how {
+	case config.DirLegacy:
+		// Refuse rather than start from defaults (which would reopen
+		// /auth/setup) or migrate into the data volume (which would split the
+		// config between the host file and the volume).
+		return "", nil, nil, fmt.Errorf("found a legacy single-file config at %s/config.yaml: "+
+			"move config.yaml into ./config/ on the host and mount ./config:/data/config "+
+			"(see docs/config-domains.md); it is migrated on the next start", dir)
+	case config.DirDefault, config.DirExisting:
+		log.Info("no config files found; starting from defaults", "dir", dir)
 	}
-
-	// Environment variable overrides.
-	// e.g. FOCACAL_OLLAMA_BASE_URL overrides ollama.base_url
-	viper.SetEnvPrefix("FOCACAL")
-	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
-	viper.AutomaticEnv()
-
-	// Also bind common bare env vars that users set directly.
-	viper.BindEnv("ollama.base_url", "OLLAMA_BASE_URL")
-	viper.BindEnv("oauth.redirect_base_url", "OAUTH_REDIRECT_BASE_URL")
-
-	if err := viper.ReadInConfig(); err != nil {
-		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
-			fmt.Fprintf(os.Stderr, "error reading config: %v\n", err)
-		}
-		// Missing config file is not fatal — defaults + env vars may be enough.
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return "", nil, nil, fmt.Errorf("config dir %s: %w", dir, err)
 	}
+	// Migration runs before anything reads the directory.
+	migrated, err := config.MigrateLegacy(dir)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	if migrated {
+		log.Info("migrated legacy config.yaml to the directory layout; original kept as config.yaml.bak",
+			"dir", dir)
+	}
+	if keys := config.LegacyKeys(dir); len(keys) > 0 {
+		log.Warn("config.yaml holds keys that now live in planner.yaml / calendars.yaml and are ignored",
+			"dir", dir, "keys", keys)
+	}
+	started, running, err = config.LoadStart(dir)
+	if err != nil {
+		return "", nil, nil, fmt.Errorf("load config from %s: %w", dir, err)
+	}
+	return dir, started, running, nil
 }

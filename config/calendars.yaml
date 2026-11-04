@@ -1,0 +1,15 @@
+# Calendars: sources (accounts read from) and destinations.
+# Secrets do not belong here: use ics_url_env / credentials_file references.
+# Relative credentials_file / token_file paths resolve under this directory.
+
+# Calendar sources — add one entry per Google or Outlook account.
+sources:
+  - id: "work-google" # unique slug
+    type: "google"
+    calendar_ids: [] # empty = primary calendar only
+    # - id: "personal-outlook"
+    #   type: "outlook"
+    #   calendar_ids: []
+    # - id: "team-feed"
+    #   type: "ics"
+    #   ics_url_env: "FOCACAL_ICS_TEAM_FEED" # feed URL lives in .env

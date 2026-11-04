@@ -8,12 +8,10 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
 	"github.com/Kenttleton/focacal/internal/auth/simple"
 	"github.com/Kenttleton/focacal/internal/bus"
 	"github.com/Kenttleton/focacal/internal/config"
@@ -41,9 +39,17 @@ func init() {
 func runStart(_ *cobra.Command, _ []string) error {
 	log := newLogger()
 
-	cfg, err := config.Load()
+	// started is env-free: config.NewService compares it with the files on
+	// disk for pending_restart, so env overrides must never be applied to it.
+	// cfg has env overrides applied and is what the process runs with.
+	configDir, started, cfg, err := loadConfig(log)
 	if err != nil {
-		return fmt.Errorf("load config: %w", err)
+		return err
+	}
+	log.Info("config loaded", "dir", configDir)
+	configSvc, err := config.NewService(configDir, started)
+	if err != nil {
+		return fmt.Errorf("config service: %w", err)
 	}
 
 	// Ensure a recovery key exists for hard-reset of forgotten credentials.
@@ -113,13 +119,10 @@ func runStart(_ *cobra.Command, _ []string) error {
 	health := rest.NewHealthState()
 	caldavSrv := caldav.New(caldavAddr, log)
 	restSrv := rest.New(connectors, health, restAddr, log)
-	// Login credentials live in credentials.yaml beside the config file.
-	// T8 replaces this with the --config directory.
-	configDir := "."
-	if p := viper.ConfigFileUsed(); p != "" {
-		configDir = filepath.Dir(p)
-	}
+	// The resolved config directory holds the domain files and
+	// credentials.yaml, whichever --config form was used.
 	restSrv.SetConfigDir(configDir)
+	restSrv.SetConfigService(configSvc)
 	restSrv.SetRecoveryKeyPath(recoveryPath)
 	mcpSrv := mcp.New(mcpAddr, log)
 

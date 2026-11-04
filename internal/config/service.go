@@ -117,9 +117,16 @@ func readDomainFiles(dir string) (map[Domain][]byte, error) {
 // without validating. Each file contributes only its own domain's top-level
 // keys; anything else in it (a stray `sources:` in config.yaml, unread blocks
 // such as `ollama:`) is ignored, so one file can never override another.
-func loadFiles(files map[Domain][]byte) (*Config, error) {
+func loadFiles(files map[Domain][]byte) (*Config, error) { return loadFilesWith(files, nil) }
+
+// loadFilesWith is loadFiles with an optional hook to configure the viper
+// instance (LoadStart uses it to add environment overrides).
+func loadFilesWith(files map[Domain][]byte, prep func(*viper.Viper)) (*Config, error) {
 	v := viper.New()
 	applyDefaults(v)
+	if prep != nil {
+		prep(v)
+	}
 	v.SetConfigType("yaml")
 	for _, d := range Domains {
 		b := files[d]

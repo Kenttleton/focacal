@@ -1,0 +1,29 @@
+# Planner: working hours, lunch, focus and generated-event colors.
+# Portable: copy with the rest of the config directory.
+
+working_hours:
+  start: "09:00"
+  end: "18:00"
+  timezone: "America/New_York" # IANA timezone name; planning always uses it
+
+# Legacy: replaced by planner rules (Routine, Focus, Transition). Do not extend.
+lunch:
+  preferred: "12:00" # ideal lunch start time
+  window_start: "11:30" # earliest acceptable lunch start
+  window_end: "13:30" # latest acceptable lunch start
+  duration_minutes: 60
+
+# Legacy: replaced by planner rules (Routine, Focus, Transition). Do not extend.
+focus:
+  # Style options:
+  #   flexible  — AI fills gaps intelligently, varying block lengths
+  #   pomodoro  — 25-min work blocks with 5-min breaks
+  #   fixed     — blocks of exactly max_block_minutes
+  style: "flexible"
+  min_block_minutes: 30 # ignore gaps shorter than this
+  max_block_minutes: 120 # split longer gaps at this boundary
+  buffer_around_meetings: 10 # minutes of buffer before/after meetings
+
+# Generated-event colors by event kind (optional).
+# colors:
+#   focus: "#4f7cff"

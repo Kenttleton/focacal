@@ -31,10 +31,13 @@ services:
       OUTLOOK_CLIENT_SECRET: "${OUTLOOK_CLIENT_SECRET:-}"
 
     volumes:
-      # Persistent data: SQLite DB, OAuth tokens, ICS cache.
+      # Persistent data: SQLite DB (rebuildable state only), recovery key.
       - focacal-data:/data
-      # Config file mount — edit on the host, picked up on restart.
-      - ./config.yaml:/data/config.yaml
+      # Config directory: config.yaml, planner.yaml, calendars.yaml and the
+      # local-only credentials.yaml. Writable so the UI can save settings;
+      # edits are picked up on restart. See docs/config-domains.md.
+      # On Linux the directory must be writable by uid 1001 (the container user).
+      - ./config:/data/config
 
     # Allows Ollama running on the host (not in Docker) to be reachable
     # via host.docker.internal on both Mac and Linux.

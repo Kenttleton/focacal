@@ -20,7 +20,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
-	"github.com/spf13/viper"
 	"github.com/Kenttleton/focacal/internal/auth/simple"
 	"github.com/Kenttleton/focacal/internal/bus"
 	"github.com/Kenttleton/focacal/internal/conflict"
@@ -67,8 +66,11 @@ type Server struct {
 	addr       string
 	srv        *http.Server
 	log        *slog.Logger
-	// configDir holds credentials.yaml (and, from T8, the domain files).
+	// configDir is the config directory: the domain files and
+	// credentials.yaml. Set by SetConfigDir; empty means the working directory.
 	configDir string
+	// configSvc reads and patches the domain files (nil in auth-only tests).
+	configSvc *config.Service
 	// recoveryKeyPath is the file /auth/recover checks the key against.
 	recoveryKeyPath string
 }
@@ -76,8 +78,14 @@ type Server struct {
 // DefaultRecoveryKeyPath is where the recovery key lives in the container.
 const DefaultRecoveryKeyPath = "/data/recovery.key"
 
-// SetConfigDir sets the directory auth handlers read credentials.yaml from.
+// SetConfigDir sets the config directory (domain files and
+// credentials.yaml). cmd/start passes the directory resolved from --config or
+// the search path; there is no implicit default.
 func (s *Server) SetConfigDir(dir string) { s.configDir = dir }
+
+// SetConfigService sets the Service over the config directory, built from the
+// env-free startup snapshot so pending_restart is accurate.
+func (s *Server) SetConfigService(svc *config.Service) { s.configSvc = svc }
 
 // SetRecoveryKeyPath overrides DefaultRecoveryKeyPath (tests use a temp file).
 func (s *Server) SetRecoveryKeyPath(p string) { s.recoveryKeyPath = p }
@@ -85,12 +93,6 @@ func (s *Server) SetRecoveryKeyPath(p string) { s.recoveryKeyPath = p }
 // New creates a REST API server.
 func New(connectors map[string]connector.Connector, health *HealthState, addr string, log *slog.Logger) *Server {
 	s := &Server{connectors: connectors, health: health, addr: addr, log: log, recoveryKeyPath: DefaultRecoveryKeyPath}
-	// Until SetConfigDir is called, use the directory of the loaded config file.
-	if p := viper.ConfigFileUsed(); p != "" {
-		s.configDir = filepath.Dir(p)
-	} else {
-		s.configDir = "."
-	}
 
 	r := chi.NewRouter()
 	r.Use(middleware.Recoverer)
@@ -306,7 +308,7 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleUpdateConfig writes changed settings back to config.yaml via Viper and
+// handleUpdateConfig writes changed settings back to planner.yaml and
 // updates the in-memory config so GET /config reflects the new values immediately.
 func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	var u struct {
@@ -340,15 +342,12 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 
 	if wh := u.WorkingHours; wh != nil {
 		if wh.Start != "" {
-			viper.Set("working_hours.start", wh.Start)
 			uc.WorkingHours.Start = wh.Start
 		}
 		if wh.End != "" {
-			viper.Set("working_hours.end", wh.End)
 			uc.WorkingHours.End = wh.End
 		}
 		if wh.Timezone != "" {
-			viper.Set("working_hours.timezone", wh.Timezone)
 			uc.WorkingHours.Timezone = wh.Timezone
 		}
 	}
@@ -360,51 +359,39 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		viper.Set("display_timezone", tz)
 		uc.DisplayTimezone = tz
 	}
 	if l := u.Lunch; l != nil {
 		if l.Preferred != "" {
-			viper.Set("lunch.preferred", l.Preferred)
 			uc.Lunch.Preferred = l.Preferred
 		}
 		if l.WindowStart != "" {
-			viper.Set("lunch.window_start", l.WindowStart)
 			uc.Lunch.WindowStart = l.WindowStart
 		}
 		if l.WindowEnd != "" {
-			viper.Set("lunch.window_end", l.WindowEnd)
 			uc.Lunch.WindowEnd = l.WindowEnd
 		}
 		if l.DurationMinutes > 0 {
-			viper.Set("lunch.duration_minutes", l.DurationMinutes)
 			uc.Lunch.DurationMinutes = l.DurationMinutes
 		}
 	}
 	if f := u.Focus; f != nil {
 		if f.Style != "" {
-			viper.Set("focus.style", f.Style)
 			uc.Focus.Style = f.Style
 		}
 		if f.MinBlockMinutes > 0 {
-			viper.Set("focus.min_block_minutes", f.MinBlockMinutes)
 			uc.Focus.MinBlockMinutes = f.MinBlockMinutes
 		}
 		if f.MaxBlockMinutes > 0 {
-			viper.Set("focus.max_block_minutes", f.MaxBlockMinutes)
 			uc.Focus.MaxBlockMinutes = f.MaxBlockMinutes
 		}
 		if f.BufferAroundMeetings >= 0 {
-			viper.Set("focus.buffer_around_meetings", f.BufferAroundMeetings)
 			uc.Focus.BufferAroundMeetings = f.BufferAroundMeetings
 		}
 	}
 
-	cfgPath := viper.ConfigFileUsed()
-	if cfgPath == "" {
-		writeError(w, http.StatusInternalServerError, "no config file in use")
-		return
-	}
+	// Interim (replaced by the domain handlers): these keys live in planner.yaml.
+	cfgPath := filepath.Join(s.configDir, config.DomainPlanner.File())
 	// Write only the sections this request touched: WriteSections re-encodes each
 	// one, which drops its inline comments, so untouched sections are left alone.
 	sections := map[string]any{}
@@ -436,7 +423,7 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := config.WriteSections(cfgPath, sections); err != nil {
 		s.log.Warn("write config", "err", err)
-		writeError(w, http.StatusInternalServerError, "could not write config.yaml: "+err.Error())
+		writeError(w, http.StatusInternalServerError, "could not write planner.yaml: "+err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"status": "saved", "restart_required": true})
@@ -802,11 +789,8 @@ func (s *Server) handlePutSources(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	path := viper.ConfigFileUsed()
-	if path == "" {
-		writeError(w, http.StatusInternalServerError, "no config file in use")
-		return
-	}
+	// Interim (replaced by the domain handlers): sources and destinations live in calendars.yaml.
+	path := filepath.Join(s.configDir, config.DomainCalendars.File())
 	if err := config.WriteSections(path, map[string]any{"sources": list}); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -828,11 +812,8 @@ func (s *Server) handlePutDestinations(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	path := viper.ConfigFileUsed()
-	if path == "" {
-		writeError(w, http.StatusInternalServerError, "no config file in use")
-		return
-	}
+	// Interim (replaced by the domain handlers): sources and destinations live in calendars.yaml.
+	path := filepath.Join(s.configDir, config.DomainCalendars.File())
 	if err := config.WriteSections(path, map[string]any{"destinations": list}); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return

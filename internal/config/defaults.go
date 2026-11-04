@@ -2,11 +2,9 @@ package config
 
 import "github.com/spf13/viper"
 
-// SetDefaults registers all default config values with the global viper.
-// These are overridden by config.yaml, then by environment variables.
-func SetDefaults() { applyDefaults(viper.GetViper()) }
-
-// applyDefaults registers all default config values with v.
+// applyDefaults registers all default config values with v. They are
+// overridden by the domain files, then (for the running config only) by
+// environment variables; see LoadStart.
 func applyDefaults(v *viper.Viper) {
 	// Working hours
 	v.SetDefault("working_hours.start", "09:00")

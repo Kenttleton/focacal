@@ -20,8 +20,9 @@ RUN addgroup -g 1001 focacal && adduser -u 1001 -G focacal -s /bin/sh -D focacal
 
 COPY --from=builder /focacal /usr/local/bin/focacal
 
-# /data holds the SQLite DB, config.yaml, and OAuth token cache.
-RUN mkdir -p /data && chown focacal:focacal /data
+# /data holds the SQLite DB and recovery key; /data/config is the config
+# directory (bind-mounted from ./config by docker-compose.yml).
+RUN mkdir -p /data/config && chown -R focacal:focacal /data
 
 USER focacal
 VOLUME ["/data"]

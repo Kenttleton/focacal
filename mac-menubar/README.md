@@ -103,7 +103,7 @@ The app cannot reach the focacal backend. Check that `focacal start` is running 
 Make sure you opened `FocacalMenuBar.xcodeproj` and not the `mac-menubar/` folder directly.
 
 **Popover shows "Nothing left today" when events exist**
-The backend may be returning events in a different timezone. Set the timezone in Settings to match `working_hours.timezone` in your `config.yaml`.
+The backend may be returning events in a different timezone. Set the timezone in Settings to match `working_hours.timezone` in your `config/planner.yaml`.
 
 **App not appearing in menu bar after build**
 The app uses `LSUIElement = YES` so it has no Dock icon. Check the menu bar — it may be hidden if the bar is full. Try reducing other menu bar items or use Bartender/Ice to reveal hidden items.

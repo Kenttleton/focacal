@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"os"
 	"time"
-
-	"github.com/spf13/viper"
 )
 
 // FocacalSource is the built-in source id used for Focacal-generated events.
@@ -233,18 +231,6 @@ type AuthConfig struct {
 	APIKey  string `mapstructure:"api_key" json:"api_key" yaml:"api_key"` // legacy static key (backward compat)
 	// Login credentials (username, password_hash) live in credentials.yaml;
 	// see LoadCredentials.
-}
-
-// Load reads and unmarshals config from viper.
-func Load() (*Config, error) {
-	var cfg Config
-	if err := viper.Unmarshal(&cfg); err != nil {
-		return nil, fmt.Errorf("unmarshal config: %w", err)
-	}
-	if err := cfg.Validate(); err != nil {
-		return nil, err
-	}
-	return &cfg, nil
 }
 
 func parseTOD(s string) (time.Duration, error) {

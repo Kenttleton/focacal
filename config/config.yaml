@@ -1,0 +1,39 @@
+# focacal App settings: servers, scheduler agent, OAuth redirect, auth switch.
+#
+# This directory (config/) is the whole portable configuration:
+#   config.yaml     App (this file)
+#   planner.yaml    Planner: working hours, lunch, focus, generated-event colors
+#   calendars.yaml  Calendars: sources and destinations
+#   credentials.yaml  login (local only, gitignored, created by /auth/setup)
+# docker-compose.yml mounts it at /data/config. See docs/config-domains.md.
+#
+# Secrets (OAuth client secrets, agent api_key, ICS feed URLs) belong in .env,
+# not here. Every value below is overridable with FOCACAL_<SECTION>_<KEY>.
+
+# Internal server ports — these are container-internal ports.
+# To change the HOST port, set CALDAV_PORT / REST_PORT / MCP_PORT in .env.
+server:
+  caldav_port: 5232
+  rest_port: 5233
+  mcp_port: 5234
+  oauth_port: 8080
+  bind_address: "0.0.0.0"
+  webhooks_enabled: false # polling every 5 minutes covers it
+
+# Scheduler agent — any OpenAI-compatible endpoint (docs/scheduler-agent.md).
+# Defaults shown; uncomment to change. Put api_key in .env as
+# FOCACAL_AGENT_API_KEY, never here.
+# agent:
+#   base_url: "http://localhost:11434/v1"
+#   model: "qwen2.5:14b"
+#   timeout_secs: 120
+#   max_tokens: 4096
+
+oauth:
+  # Also configurable via OAUTH_REDIRECT_BASE_URL env var.
+  redirect_base_url: "http://localhost:8080"
+
+# Login credentials are not stored here: first run opens /auth/setup, which
+# writes credentials.yaml in this directory.
+auth:
+  enabled: true

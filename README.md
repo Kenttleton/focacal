@@ -38,11 +38,17 @@ cp .env.example .env
 
 Edit `.env` and fill in your OAuth credentials. See [OAuth setup](#oauth-setup) below.
 
-Copy `config.yaml` and edit your working hours, timezone, and sources:
+Edit the config directory, `config/`: working hours and timezone in
+`config/planner.yaml`, calendar sources in `config/calendars.yaml`, ports and
+the scheduler agent in `config/config.yaml`. See
+[docs/config-domains.md](docs/config-domains.md) for what lives where.
 
 ```bash
-# config.yaml is already present — edit it directly
+$EDITOR config/planner.yaml config/calendars.yaml
 ```
+
+Upgrading from a single `config.yaml`? Move it into `config/` (`mkdir -p config && mv config.yaml config/`);
+focacal splits it into the new files on first start and keeps `config.yaml.bak`.
 
 ### 2. Start the stack
 
@@ -70,7 +76,7 @@ chmod +x focacal.sh
 sudo cp focacal.sh /usr/local/bin/focacal
 ```
 
-Authorize each source listed in `config.yaml`:
+Authorize each source listed in `config/calendars.yaml`:
 
 ```bash
 focacal auth google work-google
@@ -161,9 +167,28 @@ All commands run inside the container via the `focacal.sh` wrapper:
 
 ## Configuration reference
 
-`config.yaml` controls all non-secret settings. Changes take effect on container restart.
+The `config/` directory holds all non-secret settings, one file per domain.
+Changes take effect on container restart.
+
+| File | Holds |
+|---|---|
+| `config/config.yaml` | App: `server`, `agent`, `oauth`, `auth.enabled` |
+| `config/planner.yaml` | Planner: `working_hours`, `lunch`, `focus`, `colors` |
+| `config/calendars.yaml` | Calendars: `sources`, `destinations` |
+| `config/credentials.yaml` | login, created by first-run setup (local only, gitignored) |
+
+The directory is portable: copy `config/` (and `.env`) to another host, run
+`focacal auth` for each OAuth source, and start. The SQLite DB holds only
+rebuildable state (synced events, OAuth tokens, planner output). To reset the
+login, delete `config/credentials.yaml` and restart; setup reopens. Full
+details, legacy keys and migration: [docs/config-domains.md](docs/config-domains.md).
+
+`lunch` and `focus` are legacy keys, to be replaced by planner rules (Routine,
+Focus, Transition).
 
 ### Working hours
+
+In `config/planner.yaml`:
 
 ```yaml
 working_hours:
@@ -202,6 +227,8 @@ lunch:
 ```
 
 ### Sources
+
+In `config/calendars.yaml`:
 
 ```yaml
 sources:
@@ -298,11 +325,9 @@ ollama serve
 # Create /data directory for the SQLite store
 mkdir -p /data
 
-# Copy config
-cp config.yaml /data/config.yaml
-
-# Run
-go run . start
+# Run from the repo root, naming the config directory (without --config,
+# an empty search falls back to /data/config because /data exists):
+go run . start --config ./config
 ```
 
 ### Desktop app (Wails)
@@ -329,22 +354,24 @@ wails build
 
 ```bash
 cp .env.example .env   # fill in OAuth creds
-# edit config.yaml as needed
+# edit config/*.yaml as needed
 docker compose up -d --build
 ```
 
-The config.yaml mount is writable so the UI's config editors persist. Restart the container after editing sources/destinations.
+`./config` is mounted at `/data/config` and is writable so the UI's config
+editors persist (on Linux, make it writable by uid 1001). Restart the
+container after editing.
 
 ### Project layout
 
 ```
 focacal/
 ├── cmd/                        # cobra CLI commands
-│   ├── root.go                 # viper init, global flags
+│   ├── root.go                 # config dir resolution + migration, global flags
 │   ├── start.go                # launches all services
 │   └── auth.go                 # OAuth flow + sync/status commands
 ├── internal/
-│   ├── config/                 # typed config struct + viper defaults
+│   ├── config/                 # typed config, domain files, migration, credentials
 │   ├── connector/
 │   │   ├── connector.go        # Connector interface
 │   │   ├── google/             # Google Calendar OAuth + sync + write-back
@@ -363,7 +390,10 @@ focacal/
 ├── Dockerfile
 ├── docker-compose.yml
 ├── docker-compose.ollama.yml   # optional: Ollama in-stack
-├── config.yaml                 # non-secret configuration (safe to commit)
+├── config/                     # config directory (see docs/config-domains.md)
+│   ├── config.yaml             # App: servers, agent, oauth, auth switch
+│   ├── planner.yaml            # Planner: working hours, lunch, focus, colors
+│   └── calendars.yaml          # Calendars: sources, destinations
 ├── .env.example                # secret template (never commit .env)
 └── focacal.sh                  # host-side CLI wrapper
 ```

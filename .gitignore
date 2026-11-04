@@ -45,3 +45,6 @@ docker-compose.override.yml
 # Local-only login credentials (internal/config/credentials.go)
 credentials.yaml
 config/credentials.yaml
+# Writer / migration backups (config.yaml.bak may hold a password hash)
+config/*.bak
+*.yaml.bak
