@@ -72,6 +72,17 @@ func (db *DB) DeleteEvent(ctx context.Context, id string) error {
 	return err
 }
 
+// DeleteEventsBySource removes every stored event belonging to sourceID and
+// returns how many rows were deleted. Used when a source is dropped from config.
+func (db *DB) DeleteEventsBySource(ctx context.Context, sourceID string) (int, error) {
+	res, err := db.ExecContext(ctx, `DELETE FROM events WHERE source_id = ?`, sourceID)
+	if err != nil {
+		return 0, err
+	}
+	n, err := res.RowsAffected()
+	return int(n), err
+}
+
 // ListEvents returns all events whose start_time falls within [from, to).
 func (db *DB) ListEvents(ctx context.Context, from, to time.Time) ([]*Event, error) {
 	q := `SELECT ` + eventColumns + `

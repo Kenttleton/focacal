@@ -311,3 +311,58 @@ func TestReconcileBuildErrorNotLogged(t *testing.T) {
 		t.Fatalf("log output leaks or lacks id: %q", out)
 	}
 }
+
+func TestPurgeDroppedWaitsForCancelledSync(t *testing.T) {
+	var mu sync.Mutex
+	var order []string
+	note := func(s string) { mu.Lock(); order = append(order, s); mu.Unlock() }
+	started := make(chan struct{})
+	f := &fakeConn{id: "a", onSync: func(ctx context.Context) {
+		close(started)
+		<-ctx.Done()
+		time.Sleep(50 * time.Millisecond) // a cancelled Sync still finishing its writes
+		note("sync-write")
+	}}
+	reg, old := registerFake(f)
+	b := bus.New(10 * time.Millisecond)
+	go syncOnly(context.Background(), discardLog(), reg, []string{"a"}, b)
+	<-started
+	_, dropped := reconcile(reg, old, cfgWith(), nil, discardLog())
+	if len(dropped) != 1 || dropped[0].id != "a" {
+		t.Fatalf("dropped = %v", dropped)
+	}
+	n := purgeDropped(context.Background(), discardLog(), dropped, func(_ context.Context, id string) (int, error) {
+		note("purge " + id)
+		return 3, nil
+	})
+	mu.Lock()
+	defer mu.Unlock()
+	if n != 3 || !reflect.DeepEqual(order, []string{"sync-write", "purge a"}) {
+		t.Fatalf("n=%d order=%v, want purge after sync finished", n, order)
+	}
+}
+
+func TestReconcileRebuiltSourceIsNotPurged(t *testing.T) {
+	f := &fakeConn{id: "a"}
+	reg, old := registerFake(f)
+	build, _ := fakeBuild()
+	_, dropped := reconcile(reg, old, cfgWith(config.SourceConfig{ID: "a", Type: "ics", Label: "new"}), build, discardLog())
+	if len(dropped) != 0 {
+		t.Fatalf("rebuilt source reported dropped: %v", dropped)
+	}
+}
+
+func TestSyncErrorNotLogged(t *testing.T) {
+	var buf strings.Builder
+	log := slog.New(slog.NewTextHandler(&buf, nil))
+	reg := connector.NewRegistry()
+	reg.Replace(map[string]connector.Connector{"a": errConn{&fakeConn{id: "a"}}})
+	syncAll(context.Background(), log, reg, bus.New(time.Millisecond))
+	if strings.Contains(buf.String(), "hunter2") || !strings.Contains(buf.String(), "source=a") {
+		t.Fatalf("log = %q", buf.String())
+	}
+}
+
+type errConn struct{ *fakeConn }
+
+func (errConn) Sync(context.Context) error { return errors.New("GET https://u:hunter2@x.example/cal") }

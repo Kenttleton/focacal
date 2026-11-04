@@ -11,11 +11,11 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/spf13/cobra"
 	"github.com/Kenttleton/focacal/internal/config"
 	googleconn "github.com/Kenttleton/focacal/internal/connector/google"
 	outlookconn "github.com/Kenttleton/focacal/internal/connector/outlook"
 	"github.com/Kenttleton/focacal/internal/store"
+	"github.com/spf13/cobra"
 )
 
 var authCmd = &cobra.Command{

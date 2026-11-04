@@ -164,7 +164,14 @@ func runStart(_ *cobra.Command, _ []string) error {
 	// React to live config changes. Handlers must not call live.Reload (it
 	// would deadlock); live.Current is fine.
 	live.OnChange(func(old, cur *config.Config) {
-		added := reconcileConnectors(reg, old, cur, build, log)
+		added, dropped := reconcile(reg, old, cur, build, log)
+		if len(dropped) > 0 {
+			go func() {
+				if purgeDropped(ctx, log, dropped, db.DeleteEventsBySource) > 0 {
+					b.Publish(bus.Message{Type: bus.EventReplanRequested, RequestID: newRequestID()})
+				}
+			}()
+		}
 		if len(added) > 0 {
 			// Off the notification goroutine: syncing can take a while.
 			go func() {
@@ -252,7 +259,8 @@ func registerWebhooks(ctx context.Context, log *slog.Logger, connectors map[stri
 	for id, c := range connectors {
 		webhookURL := fmt.Sprintf("%s/webhooks/%s", baseURL, id)
 		if err := c.RegisterWebhook(ctx, webhookURL); err != nil {
-			log.Warn("register webhook", "source", id, "err", err)
+			// Provider errors can embed URLs; log the source only.
+			log.Warn("register webhook failed", "source", id)
 		}
 	}
 }
@@ -288,7 +296,8 @@ func syncConnectors(ctx context.Context, log *slog.Logger, reg *connector.Regist
 			continue
 		}
 		if err != nil {
-			log.Error("sync failed", "source", id, "err", err)
+			// Provider errors can embed URLs; log the source only.
+			log.Error("sync failed", "source", id)
 			continue
 		}
 		log.Info("synced", "source", id)
@@ -372,6 +381,20 @@ func usesRedirectBase(sourceType string) bool {
 // others are unaffected. old may be nil (initial startup). It returns the ids
 // that were added or rebuilt, in config order.
 func reconcileConnectors(reg *connector.Registry, old, cur *config.Config, build buildFunc, log *slog.Logger) (added []string) {
+	added, _ = reconcile(reg, old, cur, build, log)
+	return added
+}
+
+// droppedSource is a source removed from config whose connector has been
+// cancelled and whose stored events still need purging.
+type droppedSource struct {
+	id string
+	m  *managed
+}
+
+// reconcile is reconcileConnectors plus the list of sources that were dropped
+// from config (as opposed to rebuilt), for purgeDropped.
+func reconcile(reg *connector.Registry, old, cur *config.Config, build buildFunc, log *slog.Logger) (added []string, dropped []droppedSource) {
 	existing := reg.Snapshot()
 	prev := map[string]config.SourceConfig{}
 	oldRedirect := ""
@@ -405,14 +428,44 @@ func reconcileConnectors(reg *connector.Registry, old, cur *config.Config, build
 	reg.Replace(next)
 	// Cancel in-flight syncs of every instance that was dropped or replaced so
 	// it stops writing to the store.
+	configured := make(map[string]bool, len(cur.Sources))
+	for _, src := range cur.Sources {
+		configured[src.ID] = true
+	}
 	for id, c := range existing {
-		if next[id] != c {
-			if m, ok := c.(*managed); ok {
-				m.cancel()
-			}
+		if next[id] == c {
+			continue
+		}
+		m, ok := c.(*managed)
+		if !ok {
+			continue
+		}
+		m.cancel()
+		if !configured[id] {
+			dropped = append(dropped, droppedSource{id: id, m: m})
 		}
 	}
-	return added
+	return added, dropped
+}
+
+// purgeDropped deletes the stored events of sources dropped from config. For
+// each it waits for the cancelled in-flight Sync (if any) to return, holding
+// the instance's sync lock while purging, so that Sync cannot re-insert rows
+// after the purge. It returns the total number of rows removed.
+func purgeDropped(ctx context.Context, log *slog.Logger, dropped []droppedSource, purge func(ctx context.Context, sourceID string) (int, error)) int {
+	total := 0
+	for _, d := range dropped {
+		d.m.mu.Lock()
+		n, err := purge(ctx, d.id)
+		d.m.mu.Unlock()
+		if err != nil {
+			log.Warn("purge events of removed source failed", "source", d.id)
+			continue
+		}
+		log.Info("purged events of removed source", "source", d.id, "count", n)
+		total += n
+	}
+	return total
 }
 
 // plannerInputsChanged reports whether anything the planner or the source set
