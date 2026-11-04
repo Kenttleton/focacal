@@ -2,6 +2,7 @@ package config
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"os"
 	"path/filepath"
@@ -41,6 +42,7 @@ type fileSig struct {
 	exists bool
 	size   int64
 	mtime  time.Time
+	sum    [sha256.Size]byte // content hash: catches same-size edits within one coarse mtime tick
 }
 
 // watchedNames are the only files that matter: the domain files and the
@@ -57,7 +59,11 @@ func (l *Live) statFiles(names map[string]bool) map[string]fileSig {
 	sigs := make(map[string]fileSig, len(names))
 	for n := range names {
 		if fi, err := os.Stat(filepath.Join(l.dir, n)); err == nil {
-			sigs[n] = fileSig{exists: true, size: fi.Size(), mtime: fi.ModTime()}
+			sig := fileSig{exists: true, size: fi.Size(), mtime: fi.ModTime()}
+			if b, err := os.ReadFile(filepath.Join(l.dir, n)); err == nil { // files are tiny
+				sig.sum = sha256.Sum256(b)
+			}
+			sigs[n] = sig
 		} else {
 			sigs[n] = fileSig{}
 		}
@@ -68,7 +74,7 @@ func (l *Live) statFiles(names map[string]bool) map[string]fileSig {
 func sigsEqual(a, b map[string]fileSig) bool {
 	for n, s := range a {
 		o := b[n]
-		if s.exists != o.exists || s.size != o.size || !s.mtime.Equal(o.mtime) {
+		if s.exists != o.exists || s.size != o.size || !s.mtime.Equal(o.mtime) || s.sum != o.sum {
 			return false
 		}
 	}
@@ -170,15 +176,11 @@ func (l *Live) Watch(ctx context.Context) error {
 			pending = false
 			reload()
 		case <-poll.C:
-			if !sigsEqual(l.statFiles(names), last) {
-				if pending && !timer.Stop() {
-					select {
-					case <-timer.C:
-					default:
-					}
-				}
-				pending = false
-				reload()
+			// Same debounce as events, so a file caught half-written settles
+			// before it is read.
+			if cur := l.statFiles(names); !sigsEqual(cur, last) {
+				last = cur
+				schedule()
 			}
 		}
 	}

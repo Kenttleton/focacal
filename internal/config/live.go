@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"io"
 	"log/slog"
 	"reflect"
@@ -15,6 +16,7 @@ import (
 // runs with (env applied, file paths resolved).
 type snapshot struct {
 	file, running *Config
+	content       map[Domain]bool // which domain files had non-blank content
 }
 
 type loadErr struct{ err error }
@@ -48,12 +50,12 @@ func NewLive(dir string, log *slog.Logger) (*Live, error) {
 	if log == nil {
 		log = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
-	file, running, err := loadSnapshot(dir)
+	file, running, content, err := loadSnapshotContent(dir)
 	if err != nil {
 		return nil, err
 	}
 	l := &Live{dir: dir, log: log, server: file.Server}
-	l.snap.Store(&snapshot{file: file, running: running})
+	l.snap.Store(&snapshot{file: file, running: running, content: content})
 	return l, nil
 }
 
@@ -97,15 +99,28 @@ func (l *Live) OnChange(fn func(old, cur *Config)) {
 // run.
 func (l *Live) Reload() (changed bool, err error) {
 	l.reloadMu.Lock()
-	file, running, err := loadSnapshot(l.dir)
+	file, running, content, err := loadSnapshotContent(l.dir)
+	prev := l.snap.Load()
+	if err == nil {
+		// A file that had content and is now blank or gone was most likely
+		// caught mid-write (truncate-then-write, delete-then-create). Applying
+		// it would drop every source and purge their data, so refuse it; a
+		// deliberate reset is `{}`.
+		for _, d := range Domains {
+			if prev.content[d] && !content[d] {
+				err = fmt.Errorf("%s is empty or missing; write `{}` to reset it deliberately", d.File())
+				break
+			}
+		}
+	}
 	if err != nil {
 		l.lastErr.Store(&loadErr{err})
 		l.reloadMu.Unlock()
 		l.log.Warn("config reload failed; keeping the previous config", "err", err)
 		return false, err
 	}
-	old := l.snap.Load()
-	l.snap.Store(&snapshot{file: file, running: running})
+	old := prev
+	l.snap.Store(&snapshot{file: file, running: running, content: content})
 	l.lastErr.Store(nil)
 	changed = !reflect.DeepEqual(old.running, running)
 	if changed {
@@ -121,8 +136,20 @@ func (l *Live) Reload() (changed bool, err error) {
 		subs := slices.Clone(l.subs)
 		l.subMu.Unlock()
 		for _, fn := range subs {
-			fn(old.running, running)
+			l.notify(fn, old.running, running)
 		}
 	}
 	return changed, nil
+}
+
+// notify runs one subscriber, recovering a panic so a faulty subscriber cannot
+// kill the caller (the watcher or an API handler) or skip the others. The log
+// carries the panic value's type only: its text could hold config values.
+func (l *Live) notify(fn func(old, cur *Config), old, cur *Config) {
+	defer func() {
+		if r := recover(); r != nil {
+			l.log.Error("config change subscriber panicked; continuing", "panic_type", fmt.Sprintf("%T", r))
+		}
+	}()
+	fn(old, cur)
 }

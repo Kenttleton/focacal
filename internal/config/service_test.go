@@ -293,6 +293,7 @@ func TestPatchInvalidLeavesFilesUntouched(t *testing.T) {
 		"bad port":            {DomainApp, `{"server":{"rest_port":0}}`},
 		"duplicate port":      {DomainApp, `{"server":{"rest_port":5232}}`},
 		"unknown source type": {DomainCalendars, `{"sources":{"x":{"type":"nope"}}}`},
+		"colon in source id":  {DomainCalendars, `{"sources":{"a:b":{"type":"ics","ics_url":"https://x/y.ics"}}}`},
 		"id mismatch":         {DomainCalendars, `{"sources":{"work":{"id":"other"}}}`},
 	}
 	for name, tc := range cases {

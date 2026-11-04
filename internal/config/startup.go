@@ -146,29 +146,41 @@ func LoadStart(dir string) (started, running *Config, err error) {
 
 // loadSnapshot is LoadStart's body; Live reuses it for every (re)load.
 func loadSnapshot(dir string) (started, running *Config, err error) {
+	started, running, _, err = loadSnapshotContent(dir)
+	return started, running, err
+}
+
+// loadSnapshotContent is loadSnapshot that also reports which domain files
+// had non-blank content, so a reload can tell a deliberate `{}` from a file
+// caught empty or missing mid-write.
+func loadSnapshotContent(dir string) (started, running *Config, content map[Domain]bool, err error) {
 	files, err := readDomainFiles(dir)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
+	}
+	content = make(map[Domain]bool, len(files))
+	for d, b := range files {
+		content[d] = len(bytes.TrimSpace(b)) > 0
 	}
 	started, err = loadFiles(files)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if err := started.Validate(); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	running, err = loadFiles(files)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if err := ApplyEnv(running, os.Getenv); err != nil {
-		return nil, nil, fmt.Errorf("environment: %w", err)
+		return nil, nil, nil, fmt.Errorf("environment: %w", err)
 	}
 	if err := running.Validate(); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	running.ResolveFilePaths(dir)
-	return started, running, nil
+	return started, running, content, nil
 }
 
 // ResolveFilePaths joins relative credentials_file and token_file values of

@@ -209,6 +209,9 @@ type SyncStateRow struct {
 // per-calendar rows keyed "<id>:<calendar>" (google and outlook sync tokens,
 // google webhooks). OAuth tokens are left alone so a re-added source keeps its
 // login. Returns the number of rows deleted.
+//
+// sourceID must not contain ":" (the API rejects such ids): with one, "a" and
+// "a:b" would be ambiguous. Callers skip ids that do.
 func (db *DB) DeleteSyncStateBySource(ctx context.Context, sourceID string) (int, error) {
 	const q = `DELETE FROM sync_state WHERE source_id = ? OR substr(source_id, 1, length(?) + 1) = ? || ':'`
 	res, err := db.ExecContext(ctx, q, sourceID, sourceID, sourceID)

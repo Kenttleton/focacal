@@ -8,7 +8,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 )
 
 func writeFile(t *testing.T, dir, name, body string) {
@@ -252,13 +251,16 @@ func TestLiveNotificationsInSwapOrder(t *testing.T) {
 	var mu sync.Mutex
 	var got [][2]*Config
 	first := true
+	inFirst := make(chan struct{})
+	release := make(chan struct{})
 	l.OnChange(func(old, cur *Config) {
 		mu.Lock()
 		isFirst := first
 		first = false
 		mu.Unlock()
 		if isFirst {
-			time.Sleep(100 * time.Millisecond)
+			close(inFirst)
+			<-release
 		}
 		mu.Lock()
 		got = append(got, [2]*Config{old, cur})
@@ -268,14 +270,139 @@ func TestLiveNotificationsInSwapOrder(t *testing.T) {
 	writeFile(t, dir, "planner.yaml", strings.Replace(testPlannerYAML, `"17:00"`, `"18:00"`, 1))
 	done := make(chan struct{})
 	go func() { _, _ = l.Reload(); close(done) }()
-	time.Sleep(30 * time.Millisecond) // first Reload is now inside its subscriber
+	<-inFirst // first Reload is now inside its subscriber
+	writeFile(t, dir, "planner.yaml", strings.Replace(testPlannerYAML, `"17:00"`, `"19:00"`, 1))
+	second := make(chan struct{})
+	go func() {
+		if _, err := l.Reload(); err != nil {
+			t.Error(err)
+		}
+		close(second)
+	}()
+	close(release)
+	<-done
+	<-second
+	mu.Lock()
+	defer mu.Unlock()
+	if len(got) != 2 || got[0][0] != start || got[1][0] != got[0][1] || got[1][1] != l.Current() {
+		t.Errorf("deliveries out of order: %d", len(got))
+	}
+}
+
+func TestReloadRefusesEmptyOrMissingDomainFile(t *testing.T) {
+	for name, damage := range map[string]func(t *testing.T, path string){
+		"zero bytes": func(t *testing.T, p string) {
+			if err := os.WriteFile(p, nil, 0644); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"whitespace": func(t *testing.T, p string) {
+			if err := os.WriteFile(p, []byte(" \n\t\n"), 0644); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"deleted": func(t *testing.T, p string) {
+			if err := os.Remove(p); err != nil {
+				t.Fatal(err)
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := writeTestDir(t)
+			l := newTestLive(t, dir)
+			var notified atomic.Int32
+			l.OnChange(func(_, _ *Config) { notified.Add(1) })
+			before := l.Current()
+			if len(before.Sources) == 0 {
+				t.Fatal("fixture has no sources")
+			}
+			damage(t, filepath.Join(dir, "calendars.yaml"))
+			changed, err := l.Reload()
+			if err == nil || changed {
+				t.Fatalf("Reload = %v, %v; want an error", changed, err)
+			}
+			if !strings.Contains(err.Error(), "calendars.yaml") {
+				t.Errorf("error does not name the file: %v", err)
+			}
+			if l.Current() != before || notified.Load() != 0 {
+				t.Error("an empty file replaced the last good config")
+			}
+			if l.LoadError() == nil {
+				t.Error("LoadError not set")
+			}
+			// Recovery: restoring the content applies cleanly.
+			writeFile(t, dir, "calendars.yaml", testCalendarsYAML)
+			if _, err := l.Reload(); err != nil || l.LoadError() != nil {
+				t.Fatalf("recovery Reload err = %v, LoadError = %v", err, l.LoadError())
+			}
+		})
+	}
+}
+
+func TestReloadDeleteThenCreateConverges(t *testing.T) {
+	dir := writeTestDir(t)
+	l := newTestLive(t, dir)
+	p := filepath.Join(dir, "calendars.yaml")
+	if err := os.Remove(p); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.Reload(); err == nil {
+		t.Fatal("deleted file should be refused")
+	}
+	writeFile(t, dir, "calendars.yaml.tmp", "sources:\n  - id: g\n    type: google\n    credentials_file: g.json\n")
+	if err := os.Rename(filepath.Join(dir, "calendars.yaml.tmp"), p); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := l.Reload()
+	if err != nil || !changed {
+		t.Fatalf("Reload = %v, %v", changed, err)
+	}
+	if n := len(l.Current().Sources); n != 1 {
+		t.Errorf("sources = %d, want 1", n)
+	}
+}
+
+func TestReloadDeliberateEmptyMappingApplies(t *testing.T) {
+	dir := writeTestDir(t)
+	l := newTestLive(t, dir)
+	writeFile(t, dir, "calendars.yaml", "{}\n")
+	changed, err := l.Reload()
+	if err != nil || !changed {
+		t.Fatalf("Reload = %v, %v", changed, err)
+	}
+	if n := len(l.Current().Sources); n != 0 {
+		t.Errorf("sources = %d, want 0", n)
+	}
+}
+
+func TestReloadFreshDirectoryStaysLenient(t *testing.T) {
+	dir := t.TempDir()
+	l := newTestLive(t, dir)
+	if _, err := l.Reload(); err != nil {
+		t.Fatalf("empty directory should reload fine: %v", err)
+	}
+}
+
+func TestReloadRecoversSubscriberPanic(t *testing.T) {
+	dir := writeTestDir(t)
+	l := newTestLive(t, dir)
+	var after atomic.Int32
+	l.OnChange(func(_, _ *Config) { panic("boom") })
+	l.OnChange(func(_, _ *Config) { after.Add(1) })
+	writeFile(t, dir, "planner.yaml", strings.Replace(testPlannerYAML, `"17:00"`, `"18:00"`, 1))
+	if changed, err := l.Reload(); err != nil || !changed {
+		t.Fatalf("Reload = %v, %v", changed, err)
+	}
+	if after.Load() != 1 {
+		t.Errorf("subscriber after the panicking one ran %d times", after.Load())
+	}
+	// Locks were released: another reload must not deadlock.
 	writeFile(t, dir, "planner.yaml", strings.Replace(testPlannerYAML, `"17:00"`, `"19:00"`, 1))
 	if _, err := l.Reload(); err != nil {
 		t.Fatal(err)
 	}
-	<-done
-	if len(got) != 2 || got[0][0] != start || got[1][0] != got[0][1] || got[1][1] != l.Current() {
-		t.Errorf("deliveries out of order: %d", len(got))
+	if after.Load() != 2 {
+		t.Errorf("second delivery count = %d", after.Load())
 	}
 }
 

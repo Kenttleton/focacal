@@ -167,6 +167,43 @@ func TestWatchPollFallback(t *testing.T) {
 	waitFor(t, "poll reload", func() bool { return l.Current().WorkingHours.End == "18:00" })
 }
 
+func TestWatchPollOnlyNeverAppliesZeroByteState(t *testing.T) {
+	l, dir, reloads := newWatchLive(t, 20*time.Millisecond)
+	l.pollEvery = 10 * time.Millisecond
+	l.newWatcher = func() (dirWatcher, error) { return nil, errors.New("no inotify") }
+	var changes atomic.Int32
+	l.OnChange(func(_, _ *Config) { changes.Add(1) })
+	startWatch(t, l, reloads)
+	before := l.Current()
+	if err := os.WriteFile(filepath.Join(dir, "calendars.yaml"), nil, 0644); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "refused reload", func() bool { return l.LoadError() != nil })
+	if l.Current() != before || changes.Load() != 0 {
+		t.Error("zero-byte file was applied")
+	}
+	writeFile(t, dir, "calendars.yaml", "{}\n")
+	waitFor(t, "deliberate empty", func() bool { return len(l.Current().Sources) == 0 })
+}
+
+func TestWatchPollDetectsSameSizeSameMtimeEdit(t *testing.T) {
+	l, dir, reloads := newWatchLive(t, 20*time.Millisecond)
+	l.pollEvery = 10 * time.Millisecond
+	l.newWatcher = func() (dirWatcher, error) { return nil, errors.New("no inotify") }
+	startWatch(t, l, reloads)
+	p := filepath.Join(dir, "planner.yaml")
+	fi, err := os.Stat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// "17:00" -> "18:00" keeps the size; restore the old mtime too.
+	writeFile(t, dir, "planner.yaml", plannerEnd("18:00"))
+	if err := os.Chtimes(p, fi.ModTime(), fi.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "hash-detected reload", func() bool { return l.Current().WorkingHours.End == "18:00" })
+}
+
 // fakeWatcher is a dirWatcher whose channels the test drives.
 type fakeWatcher struct {
 	ev     chan fsnotify.Event

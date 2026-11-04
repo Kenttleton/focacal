@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"reflect"
+	"strings"
 	"syscall"
 	"time"
 
@@ -489,6 +490,12 @@ func purgeSource(db *store.DB) func(context.Context, string) (int, error) {
 		n, err := db.DeleteEventsBySource(ctx, id)
 		if err != nil {
 			return n, err
+		}
+		if strings.Contains(id, ":") {
+			// Ambiguous with "<id>:<calendar>" keys (only a hand-written
+			// config can have such an id): keep its sync state rather than
+			// risk resetting another source's.
+			return n, nil
 		}
 		_, err = db.DeleteSyncStateBySource(ctx, id)
 		return n, err

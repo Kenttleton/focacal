@@ -483,6 +483,11 @@ func checkItem(coll, id string, e any, dk domainKey) error {
 			return validationf("%s: %s must not contain \"|\"", path, f)
 		}
 	}
+	// ":" separates a source id from a calendar id in sync_state keys, so a
+	// source id with one would collide with "<id>:<calendar>" rows of another.
+	if strings.Contains(str(identity["id"]), ":") {
+		return validationf("%s: id must not contain \":\"", path)
+	}
 	if e == nil {
 		return nil
 	}
