@@ -8,10 +8,10 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"reflect"
 	"syscall"
 	"time"
 
-	"github.com/spf13/cobra"
 	"github.com/Kenttleton/focacal/internal/auth/simple"
 	"github.com/Kenttleton/focacal/internal/bus"
 	"github.com/Kenttleton/focacal/internal/config"
@@ -24,6 +24,7 @@ import (
 	"github.com/Kenttleton/focacal/internal/emitter/rest"
 	"github.com/Kenttleton/focacal/internal/mcp"
 	"github.com/Kenttleton/focacal/internal/store"
+	"github.com/spf13/cobra"
 )
 
 var startCmd = &cobra.Command{
@@ -71,44 +72,13 @@ func runStart(_ *cobra.Command, _ []string) error {
 	// Build the event bus (500ms debounce — collapses rapid webhook bursts).
 	b := bus.New(500 * time.Millisecond)
 
-	// Build connectors for each configured source.
-	connectors := make(map[string]connector.Connector)
-	redirectBase := cfg.OAuth.RedirectBaseURL
-
-	for _, src := range cfg.Sources {
-		switch src.Type {
-		case "google":
-			c, err := googleconn.New(src, db, redirectBase)
-			if err != nil {
-				log.Warn("init google connector", "id", src.ID, "err", err)
-				continue
-			}
-			connectors[src.ID] = c
-		case "outlook":
-			c, err := outlookconn.New(src, db, redirectBase, "common")
-			if err != nil {
-				log.Warn("init outlook connector", "id", src.ID, "err", err)
-				continue
-			}
-			connectors[src.ID] = c
-		case "caldav":
-			c, err := caldavconn.New(src, db)
-			if err != nil {
-				log.Warn("init caldav connector", "id", src.ID, "err", err)
-				continue
-			}
-			connectors[src.ID] = c
-		case "ics":
-			c, err := icsconn.New(src, db)
-			if err != nil {
-				log.Warn("init ics connector", "id", src.ID, "err", err)
-				continue
-			}
-			connectors[src.ID] = c
-		default:
-			log.Warn("unknown source type", "type", src.Type, "id", src.ID)
-		}
+	// Build connectors for each configured source. The registry is kept in
+	// step with live config by reconcileConnectors (see OnChange below).
+	reg := connector.NewRegistry()
+	build := func(src config.SourceConfig, redirectBase string) (connector.Connector, error) {
+		return buildConnector(src, db, redirectBase)
 	}
+	reconcileConnectors(reg, nil, cfg, build, log)
 
 	// Build emitters.
 	caldavAddr := fmt.Sprintf("%s:%d", cfg.Server.BindAddress, cfg.Server.CalDAVPort)
@@ -117,7 +87,7 @@ func runStart(_ *cobra.Command, _ []string) error {
 
 	health := rest.NewHealthState()
 	caldavSrv := caldav.New(caldavAddr, log)
-	restSrv := rest.New(connectors, health, restAddr, log)
+	restSrv := rest.New(reg, health, restAddr, log)
 	// The resolved config directory holds the domain files and
 	// credentials.yaml, whichever --config form was used.
 	restSrv.SetConfigDir(configDir)
@@ -175,7 +145,8 @@ func runStart(_ *cobra.Command, _ []string) error {
 	// all HTTP request contexts (via BaseContext) and background goroutines can
 	// retrieve them without holding direct references.
 	ctx = store.WithStore(ctx, db)
-	ctx = config.WithUserConfig(ctx, &cfg.UserConfig)
+	// Resolved per call so planner/sync callers always see the live values.
+	ctx = config.WithUserConfigFunc(ctx, func() *config.UserConfig { return &live.Current().UserConfig })
 	ctx = bus.WithDispatcher(ctx, b)
 
 	// Start all servers concurrently.
@@ -184,15 +155,46 @@ func runStart(_ *cobra.Command, _ []string) error {
 	go func() { errCh <- restSrv.Start(ctx) }()
 	go func() { errCh <- mcpSrv.Start(ctx) }()
 
-	// Background sync: initial sync then poll every 5 minutes.
+	// Background sync: initial sync then poll every 5 minutes. The connector
+	// set and webhook base URL are re-read from live config on every tick.
 	// Webhook registration is attempted on each cycle; RegisterWebhook is
 	// idempotent and renews subscriptions only when they are about to expire.
-	webhookBase := cfg.OAuth.RedirectBaseURL
-	go func() {
-		if cfg.Server.WebhooksEnabled {
-			registerWebhooks(ctx, log, connectors, webhookBase)
+	// server.webhooks_enabled is restart-required, so it is read once.
+	webhooksEnabled := cfg.Server.WebhooksEnabled
+	syncCycle := func() {
+		if webhooksEnabled {
+			registerWebhooks(ctx, log, reg.Snapshot(), live.Current().OAuth.RedirectBaseURL)
 		}
-		syncAll(ctx, log, connectors, b, db)
+		syncAll(ctx, log, reg, b)
+	}
+
+	// React to live config changes. Handlers must not call live.Reload (it
+	// would deadlock); live.Current is fine.
+	live.OnChange(func(old, cur *config.Config) {
+		added := reconcileConnectors(reg, old, cur, build, log)
+		if len(added) > 0 {
+			// Off the notification goroutine: syncing can take a while.
+			go func() {
+				if webhooksEnabled {
+					snap := reg.Snapshot()
+					only := make(map[string]connector.Connector, len(added))
+					for _, id := range added {
+						if c, ok := snap[id]; ok {
+							only[id] = c
+						}
+					}
+					registerWebhooks(ctx, log, only, live.Current().OAuth.RedirectBaseURL)
+				}
+				syncOnly(ctx, log, reg, added, b)
+			}()
+		}
+		if plannerInputsChanged(old, cur) {
+			b.Publish(bus.Message{Type: bus.EventReplanRequested, RequestID: newRequestID()})
+		}
+	})
+
+	go func() {
+		syncCycle()
 		ticker := time.NewTicker(5 * time.Minute)
 		defer ticker.Stop()
 		for {
@@ -200,10 +202,7 @@ func runStart(_ *cobra.Command, _ []string) error {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				if cfg.Server.WebhooksEnabled {
-					registerWebhooks(ctx, log, connectors, webhookBase)
-				}
-				syncAll(ctx, log, connectors, b, db)
+				syncCycle()
 			}
 		}
 	}()
@@ -256,12 +255,37 @@ func registerWebhooks(ctx context.Context, log *slog.Logger, connectors map[stri
 	}
 }
 
-// syncAll runs Sync on every connector, deduplicates cross-source events by UID,
-// and publishes a change event with a fresh request ID.
-func syncAll(ctx context.Context, log *slog.Logger, connectors map[string]connector.Connector, b *bus.Bus, db *store.DB) {
+// syncAll syncs every connector currently in the registry.
+func syncAll(ctx context.Context, log *slog.Logger, reg *connector.Registry, b *bus.Bus) {
+	syncConnectors(ctx, log, reg, reg.Snapshot(), b)
+}
+
+// syncOnly syncs just the named sources (those still registered).
+func syncOnly(ctx context.Context, log *slog.Logger, reg *connector.Registry, ids []string, b *bus.Bus) {
+	snap := reg.Snapshot()
+	only := make(map[string]connector.Connector, len(ids))
+	for _, id := range ids {
+		if c, ok := snap[id]; ok {
+			only[id] = c
+		}
+	}
+	syncConnectors(ctx, log, reg, only, b)
+}
+
+// syncConnectors runs Sync on the given connectors (a snapshot, so registry
+// changes mid-sync cannot affect iteration) and publishes one change event
+// with a fresh request ID if any succeeded. A connector that was removed or
+// replaced while its sync was in flight is allowed to finish, but its result
+// is discarded: no log of success and no change event on its behalf.
+func syncConnectors(ctx context.Context, log *slog.Logger, reg *connector.Registry, conns map[string]connector.Connector, b *bus.Bus) {
 	changed := false
-	for id, c := range connectors {
-		if err := c.Sync(ctx); err != nil {
+	for id, c := range conns {
+		err := c.Sync(ctx)
+		if cur, ok := reg.Get(id); !ok || cur != c {
+			log.Info("sync result discarded, source removed or replaced during sync", "source", id)
+			continue
+		}
+		if err != nil {
 			log.Error("sync failed", "source", id, "err", err)
 			continue
 		}
@@ -275,6 +299,83 @@ func syncAll(ctx context.Context, log *slog.Logger, connectors map[string]connec
 			RequestID: newRequestID(),
 		})
 	}
+}
+
+// buildFunc constructs a connector for one source.
+type buildFunc func(src config.SourceConfig, redirectBase string) (connector.Connector, error)
+
+// buildConnector is the production buildFunc: one connector per source type.
+func buildConnector(src config.SourceConfig, db *store.DB, redirectBase string) (connector.Connector, error) {
+	switch src.Type {
+	case "google":
+		return googleconn.New(src, db, redirectBase)
+	case "outlook":
+		return outlookconn.New(src, db, redirectBase, "common")
+	case "caldav":
+		return caldavconn.New(src, db)
+	case "ics":
+		return icsconn.New(src, db)
+	default:
+		return nil, fmt.Errorf("unknown source type %q", src.Type)
+	}
+}
+
+// usesRedirectBase reports whether connectors of this type are built with the
+// OAuth redirect base URL.
+func usesRedirectBase(sourceType string) bool {
+	return sourceType == "google" || sourceType == "outlook"
+}
+
+// reconcileConnectors brings reg in line with cur.Sources. Sources that are
+// new, or whose SourceConfig differs from old (or, for OAuth source types,
+// whose redirect base URL changed), are built afresh; untouched sources keep
+// their existing instance; sources no longer configured are dropped. A source
+// that fails to build is logged and left out of the registry (a failed rebuild
+// drops the stale connector rather than running it on outdated settings); the
+// others are unaffected. old may be nil (initial startup). It returns the ids
+// that were added or rebuilt, in config order.
+func reconcileConnectors(reg *connector.Registry, old, cur *config.Config, build buildFunc, log *slog.Logger) (added []string) {
+	existing := reg.Snapshot()
+	prev := map[string]config.SourceConfig{}
+	oldRedirect := ""
+	if old != nil {
+		for _, s := range old.Sources {
+			prev[s.ID] = s
+		}
+		oldRedirect = old.OAuth.RedirectBaseURL
+	}
+	redirectBase := cur.OAuth.RedirectBaseURL
+
+	next := make(map[string]connector.Connector, len(cur.Sources))
+	for _, src := range cur.Sources {
+		if c, ok := existing[src.ID]; ok {
+			if p, known := prev[src.ID]; known && reflect.DeepEqual(p, src) &&
+				!(usesRedirectBase(src.Type) && oldRedirect != redirectBase) {
+				next[src.ID] = c
+				continue
+			}
+		}
+		c, err := build(src, redirectBase)
+		if err != nil {
+			log.Warn("init connector", "type", src.Type, "id", src.ID, "err", err)
+			continue
+		}
+		next[src.ID] = c
+		added = append(added, src.ID)
+	}
+	reg.Replace(next)
+	return added
+}
+
+// plannerInputsChanged reports whether anything the planner or the source set
+// depends on differs between old and cur.
+func plannerInputsChanged(old, cur *config.Config) bool {
+	return !reflect.DeepEqual(old.Sources, cur.Sources) ||
+		!reflect.DeepEqual(old.Destinations, cur.Destinations) ||
+		!reflect.DeepEqual(old.WorkingHours, cur.WorkingHours) ||
+		!reflect.DeepEqual(old.Lunch, cur.Lunch) ||
+		!reflect.DeepEqual(old.Focus, cur.Focus) ||
+		!reflect.DeepEqual(old.Agent, cur.Agent)
 }
 
 // newRequestID returns a short random hex string for log correlation.

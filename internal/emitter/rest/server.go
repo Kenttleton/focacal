@@ -60,7 +60,7 @@ var openapiJSON []byte
 
 // Server serves the focacal REST API consumed by Raycast and other clients.
 type Server struct {
-	connectors map[string]connector.Connector
+	connectors *connector.Registry
 	health     *HealthState
 	addr       string
 	srv        *http.Server
@@ -90,7 +90,7 @@ func (s *Server) SetConfigService(svc *config.Service) { s.configSvc = svc }
 func (s *Server) SetRecoveryKeyPath(p string) { s.recoveryKeyPath = p }
 
 // New creates a REST API server.
-func New(connectors map[string]connector.Connector, health *HealthState, addr string, log *slog.Logger) *Server {
+func New(connectors *connector.Registry, health *HealthState, addr string, log *slog.Logger) *Server {
 	s := &Server{connectors: connectors, health: health, addr: addr, log: log, recoveryKeyPath: DefaultRecoveryKeyPath}
 
 	r := chi.NewRouter()
@@ -297,7 +297,7 @@ func (s *Server) handleWebhookValidation(w http.ResponseWriter, r *http.Request)
 func (s *Server) handleWebhookNotification(w http.ResponseWriter, r *http.Request) {
 	sourceID := chi.URLParam(r, "sourceID")
 
-	conn, ok := s.connectors[sourceID]
+	conn, ok := s.connectors.Get(sourceID)
 	if !ok {
 		http.Error(w, "unknown source", http.StatusNotFound)
 		return
