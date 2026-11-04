@@ -43,8 +43,8 @@ variable only stops that calendar from syncing (startup logs a warning).
 
 The first start creates `config/` from the samples in `config.example/`
 (it never overwrites a file that is already there). Edit it: working hours and timezone in
-`config/planner.yaml`, calendar sources in `config/calendars.yaml`, ports and
-the scheduler agent in `config/config.yaml`. See
+`config/planner.yaml` (which also holds the scheduler agent), calendar sources
+and the OAuth redirect in `config/calendars.yaml`, ports in `config/config.yaml`. See
 [docs/config-domains.md](docs/config-domains.md) for what lives where.
 
 ```bash
@@ -185,9 +185,9 @@ Changes take effect on container restart.
 
 | File | Holds |
 |---|---|
-| `config/config.yaml` | App: `server`, `agent`, `oauth`, `auth.enabled` |
-| `config/planner.yaml` | Planner: `working_hours`, `lunch`, `focus`, `colors` |
-| `config/calendars.yaml` | Calendars: `sources`, `destinations` |
+| `config/config.yaml` | App: `server`, `auth.enabled` |
+| `config/planner.yaml` | Planner: `working_hours`, `lunch`, `focus`, `colors`, `agent` |
+| `config/calendars.yaml` | Calendars: `sources`, `destinations`, `oauth` |
 | `config/credentials.yaml` | login, created by first-run setup (local only, gitignored) |
 
 The directory is portable: copy `config/` (and `.env`) to another host, run
@@ -405,9 +405,9 @@ focacal/
 ├── docker-compose.ollama.yml   # optional: Ollama in-stack
 ├── config.example/             # sample config, copied to config/ on first start
 ├── config/                     # live config directory, gitignored (docs/config-domains.md)
-│   ├── config.yaml             # App: servers, agent, oauth, auth switch
-│   ├── planner.yaml            # Planner: working hours, lunch, focus, colors
-│   └── calendars.yaml          # Calendars: sources, destinations
+│   ├── config.yaml             # App: servers, auth switch
+│   ├── planner.yaml            # Planner: working hours, lunch, focus, agent, colors
+│   └── calendars.yaml          # Calendars: sources, destinations, oauth
 ├── .env.example                # secret template (never commit .env)
 └── focacal.sh                  # host-side CLI wrapper
 ```

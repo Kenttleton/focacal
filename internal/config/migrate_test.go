@@ -107,9 +107,9 @@ func TestMigrateLegacySplitsFiles(t *testing.T) {
 	}
 
 	wantKeys := map[string][]string{
-		"config.yaml":    {"ollama", "server", "oauth", "auth"},
+		"config.yaml":    {"ollama", "server", "auth"},
 		"planner.yaml":   {"working_hours", "lunch", "focus", "colors"},
-		"calendars.yaml": {"sources", "destinations"},
+		"calendars.yaml": {"sources", "destinations", "oauth"},
 	}
 	for f, keys := range wantKeys {
 		if got := topKeys(t, readFile(t, filepath.Join(dir, f))); !reflect.DeepEqual(got, keys) {
@@ -507,5 +507,64 @@ func TestRepoConfigDirIsCleanNewLayout(t *testing.T) {
 	}
 	if want := []string{"calendars.yaml", "config.yaml", "planner.yaml"}; !reflect.DeepEqual(tracked, want) {
 		t.Errorf("tracked config.example/ yaml files = %v, want %v (never credentials.yaml or *.bak)", tracked, want)
+	}
+}
+
+// config.yaml written by the previous version holds agent and oauth. Next to
+// the shipped sample planner.yaml and calendars.yaml they move into those
+// files instead of refusing.
+func TestMigrate_NewLayoutConfigWithAgentKey(t *testing.T) {
+	dir := t.TempDir()
+	for _, f := range []string{"planner.yaml", "calendars.yaml"} {
+		b, err := os.ReadFile(filepath.Join("..", "..", "config.example", f))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, f), b, 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old := `server:
+  caldav_port: 5232
+  rest_port: 5233
+  mcp_port: 5234
+  oauth_port: 8080
+agent:
+  base_url: "http://ollama:11434/v1"
+  model: "llama3"
+  timeout_secs: 90
+  max_tokens: 2048
+oauth:
+  redirect_base_url: "http://localhost:8080"
+auth:
+  enabled: true
+`
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(old), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := MigrateLegacy(dir); err != nil || !ok {
+		t.Fatalf("MigrateLegacy = %v, %v; want true, nil", ok, err)
+	}
+	if got := topKeys(t, readFile(t, filepath.Join(dir, "config.yaml"))); !reflect.DeepEqual(got, []string{"server", "auth"}) {
+		t.Errorf("config.yaml keys = %v, want [server auth]", got)
+	}
+	if !strings.Contains(readFile(t, filepath.Join(dir, "planner.yaml")), "agent:") {
+		t.Error("planner.yaml lacks agent")
+	}
+	if !strings.Contains(readFile(t, filepath.Join(dir, "calendars.yaml")), "oauth:") {
+		t.Error("calendars.yaml lacks oauth")
+	}
+	c, err := LoadDir(dir)
+	if err != nil {
+		t.Fatalf("LoadDir: %v", err)
+	}
+	if c.Agent.Model != "llama3" || c.Agent.TimeoutSecs != 90 || c.Agent.BaseURL != "http://ollama:11434/v1" {
+		t.Errorf("agent = %+v", c.Agent)
+	}
+	if keys := LegacyKeys(dir); len(keys) > 0 {
+		t.Errorf("LegacyKeys = %v, want none", keys)
+	}
+	if ok, err := MigrateLegacy(dir); err != nil || ok {
+		t.Errorf("second run = %v, %v; want false, nil", ok, err)
 	}
 }

@@ -15,7 +15,7 @@ All tool calls go to the local MCP server (`:5234`), regardless of which AI prov
 
 ## Configuration
 
-All settings live under the `agent` key in `config.yaml`:
+All settings live under the `agent` key in `planner.yaml`:
 
 ```yaml
 agent:
@@ -167,7 +167,7 @@ For one-off changes ("move my 3 PM focus block to 4 PM", "add a 90-minute deep w
 
 ## Environment variable override
 
-`api_key` can be provided via environment variable to avoid storing credentials in `config.yaml`:
+`api_key` can be provided via environment variable to avoid storing credentials in `planner.yaml`:
 
 ```bash
 export FOCACAL_AGENT_API_KEY=sk-...

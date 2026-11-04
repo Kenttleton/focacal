@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/mitchellh/mapstructure"
@@ -278,9 +279,16 @@ func lowerMapKeys(d Domain, patch map[string]any) error {
 // projection returns d's values in c in a comparable form: JSON-decoded,
 // with empty lists and objects folded to nil, so an added-then-deleted item
 // (empty list on disk vs absent at start) compares equal.
-func projection(c *Config, d Domain) any {
+func projection(c *Config, d Domain) any { return projectionOf(c, d, nil) }
+
+// projectionOf is projection restricted to the keys named in only (all keys
+// when only is empty).
+func projectionOf(c *Config, d Domain, only []string) any {
 	var out []any
 	for _, dk := range domainKeys[d] {
+		if len(only) > 0 && !slices.Contains(only, dk.name) {
+			continue
+		}
 		v, err := jsonValue(dk.get(c))
 		if err != nil {
 			v = dk.get(c)

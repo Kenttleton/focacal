@@ -1,9 +1,9 @@
-# focacal App settings: servers, scheduler agent, OAuth redirect, auth switch.
+# focacal App settings: servers and the auth switch.
 #
 # This directory (config/) is the whole portable configuration:
 #   config.yaml     App (this file)
-#   planner.yaml    Planner: working hours, lunch, focus, generated-event colors
-#   calendars.yaml  Calendars: sources and destinations
+#   planner.yaml    Planner: working hours, lunch, focus, scheduler agent, colors
+#   calendars.yaml  Calendars: sources, destinations and the OAuth redirect
 #   credentials.yaml  login (local only, gitignored, created by /auth/setup)
 # docker-compose.yml mounts it at /data/config. See docs/config-domains.md.
 #
@@ -20,19 +20,6 @@ server:
   oauth_port: 8080
   bind_address: "0.0.0.0"
   webhooks_enabled: false # polling every 5 minutes covers it
-
-# Scheduler agent — any OpenAI-compatible endpoint (docs/scheduler-agent.md).
-# Defaults shown; uncomment to change. Put api_key in .env as
-# FOCACAL_AGENT_API_KEY, never here.
-# agent:
-#   base_url: "http://localhost:11434/v1"
-#   model: "qwen2.5:14b"
-#   timeout_secs: 120
-#   max_tokens: 4096
-
-oauth:
-  # Also configurable via OAUTH_REDIRECT_BASE_URL env var.
-  redirect_base_url: "http://localhost:8080"
 
 # Login credentials are not stored here: first run opens /auth/setup, which
 # writes credentials.yaml in this directory.

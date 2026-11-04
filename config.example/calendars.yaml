@@ -1,4 +1,4 @@
-# Calendars: sources (accounts read from) and destinations.
+# Calendars: sources (accounts read from), destinations and the OAuth redirect.
 # Secrets do not belong here: use ics_url_env / credentials_file references.
 # Relative credentials_file / token_file paths resolve under this directory.
 
@@ -14,3 +14,7 @@ sources:
     #   type: "ics"
     #   ics_url_env: "FOCACAL_ICS_TEAM_FEED" # feed URL lives in .env; if unset,
     #                                        # only this calendar fails to sync
+
+oauth:
+  # Also configurable via OAUTH_REDIRECT_BASE_URL env var.
+  redirect_base_url: "http://localhost:8080"

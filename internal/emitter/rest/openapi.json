@@ -227,7 +227,7 @@
           "name": "domain",
           "in": "path",
           "required": true,
-          "description": "Config domain. app: server, agent, oauth, auth.enabled (config.yaml). planner: working_hours, lunch, focus, colors (planner.yaml). calendars: sources, destinations (calendars.yaml).",
+          "description": "Config domain. app: server, auth.enabled (config.yaml). planner: working_hours, lunch, focus, colors, agent (planner.yaml). calendars: sources, destinations, oauth (calendars.yaml).",
           "schema": { "type": "string", "enum": ["app", "planner", "calendars"] }
         }
       ],

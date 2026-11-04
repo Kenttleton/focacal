@@ -23,9 +23,9 @@ from.
 
 | File | Domain | Holds | Portable |
 |---|---|---|---|
-| `config.yaml` | App | `server` (ports, bind address, webhooks), `agent` (scheduler endpoint and model, not `api_key`), `oauth.redirect_base_url`, `auth.enabled` | yes |
-| `planner.yaml` | Planner | `working_hours` (with the planning time zone), `lunch`, `focus`, `colors` (generated-event palette) | yes |
-| `calendars.yaml` | Calendars | `sources` (accounts read from) and `destinations` | yes; secrets are references (see below) |
+| `config.yaml` | App | `server` (ports, bind address, webhooks), `auth.enabled` | yes |
+| `planner.yaml` | Planner | `working_hours` (with the planning time zone), `lunch`, `focus`, `colors` (generated-event palette), `agent` (scheduler endpoint and model, not `api_key`) | yes |
+| `calendars.yaml` | Calendars | `sources` (accounts read from), `destinations` and `oauth.redirect_base_url` | yes; secrets are references (see below) |
 | `credentials.yaml` | (none) | login `username` and bcrypt `password_hash`, mode 0600 | local only, gitignored |
 | `*.bak` | (none) | previous file contents from a migration or a fallback write | local only, gitignored |
 
@@ -123,8 +123,8 @@ generated on first start and printed once.
 
 On start, before loading, focacal checks the config directory's `config.yaml`:
 
-1. If it holds `working_hours`, `lunch`, `focus`, `colors`, `sources` or
-   `destinations`, those keys move to `planner.yaml` and `calendars.yaml`,
+1. If it holds `working_hours`, `lunch`, `focus`, `colors`, `agent`,
+   `sources`, `destinations` or `oauth`, those keys move to `planner.yaml` and `calendars.yaml`,
    comments included. The result is loaded and validated first; if it would
    not load (for example a YAML alias pointing at an anchor in another
    section) or would change any value, nothing is written.
@@ -135,13 +135,14 @@ On start, before loading, focacal checks the config directory's `config.yaml`:
    contain the password hash). Unknown keys stay in `config.yaml`.
 
 The migration runs once. After it, nothing is left to move and later starts
-do nothing. If `planner.yaml` or `calendars.yaml` already exists while
-`config.yaml` still holds keys for it, startup stops with an error and
-changes nothing, rather than silently keep one copy. If the existing file is
-the sample from the repo, delete it and restart; otherwise merge the keys
-into it by hand and remove them from `config.yaml`. (A target file that
-already holds exactly what the migration would write, left by an interrupted
-earlier run, counts as done, so an interrupted migration resumes.)
+do nothing. If `planner.yaml` or `calendars.yaml` already exists, the keys it
+lacks are merged into it. If it already holds one of the moved keys with a
+different value, startup stops with an error and changes nothing, rather than
+silently keep one copy. If the existing file is the sample from the repo,
+delete it and restart; otherwise reconcile the values by hand and remove the
+keys from `config.yaml`. (A key already present with the same value, left by
+an interrupted earlier run, counts as done, so an interrupted migration
+resumes.)
 
 ### Upgrading a Docker install
 

@@ -26,8 +26,8 @@ var legacyCredentialKeys = []string{"username", "password_hash", "session_token"
 
 // newFileHeaders head the domain files that migration creates.
 var newFileHeaders = map[Domain]string{
-	DomainPlanner:   "# Planner: working hours, lunch, focus and generated-event colors.\n# Portable: copy with the rest of the config directory.",
-	DomainCalendars: "# Calendars: sources (accounts read from) and destinations.\n# Secrets do not belong here: use ics_url_env / credentials_file references.",
+	DomainPlanner:   "# Planner: working hours, lunch, focus, scheduler agent and generated-event colors.\n# Portable: copy with the rest of the config directory.",
+	DomainCalendars: "# Calendars: sources (accounts read from), destinations and the OAuth redirect.\n# Secrets do not belong here: use ics_url_env / credentials_file references.",
 }
 
 // movedDomains are the domains whose keys used to live in config.yaml, in
@@ -38,16 +38,18 @@ var movedDomains = []Domain{DomainPlanner, DomainCalendars}
 // layout. It runs at startup before LoadDir.
 //
 // When config.yaml holds planner or calendars keys (working_hours, lunch,
-// focus, colors, sources, destinations), those keys move to planner.yaml and
+// focus, colors, agent, sources, destinations, oauth), those keys move to planner.yaml and
 // calendars.yaml with their comments. When config.yaml holds auth.username or
 // auth.password_hash, they move to credentials.yaml (created 0600; an
 // existing credentials.yaml is never overwritten) and auth.session_token is
 // dropped. The original file is kept as config.yaml.bak (0600: it may hold
 // the password hash). Unknown keys stay in config.yaml.
 //
-// A target file that already exists must hold exactly what this migration
-// would write (a rerun after a crash); otherwise MigrateLegacy returns an
-// error and changes nothing, because one of the two copies would be lost.
+// A target file that already exists receives the moved keys it lacks (the
+// shipped samples leave agent and oauth out or commented). A moved key it
+// already holds must have the same value (a rerun after a crash); otherwise
+// MigrateLegacy returns an error and changes nothing, because one of the two
+// copies would be lost.
 // The migrated result is loaded and validated, and compared with what the
 // single file meant, before anything is written.
 //
@@ -103,8 +105,11 @@ func MigrateLegacy(dir string) (migrated bool, err error) {
 		return false, fmt.Errorf("migrate: encode %s: %w", DomainApp.File(), err)
 	}
 
-	// Targets that exist must already hold the migrated content.
+	// A target that exists gets the moved keys it lacks merged in; a key it
+	// already holds must have the same value, or one of the two copies would
+	// be lost.
 	write := map[Domain]bool{}
+	merge := map[Domain]bool{}
 	var conflicts []string
 	for _, d := range movedDomains {
 		if out[d] == nil {
@@ -116,8 +121,18 @@ func MigrateLegacy(dir string) (migrated bool, err error) {
 			write[d] = true
 		case err != nil:
 			return false, fmt.Errorf("migrate: read %s: %w", d.File(), err)
-		case !bytes.Equal(existing, out[d]):
-			conflicts = append(conflicts, fmt.Sprintf("%s (for %s)", d.File(), strings.Join(move[d], ", ")))
+		default:
+			merged, changed, ok, err := mergeMoved(existing, pairs[d])
+			switch {
+			case err != nil:
+				return false, fmt.Errorf("migrate: parse %s: %w", d.File(), err)
+			case !ok:
+				conflicts = append(conflicts, fmt.Sprintf("%s (for %s)", d.File(), strings.Join(move[d], ", ")))
+			case changed:
+				out[d], merge[d] = merged, true
+			default:
+				out[d] = existing
+			}
 		}
 	}
 	if len(conflicts) > 0 {
@@ -158,6 +173,7 @@ func MigrateLegacy(dir string) (migrated bool, err error) {
 		}
 		created = append(created, p)
 	}
+	// Merges into existing target files happen after the backup (below).
 	bak := appPath + ".bak"
 	if err := os.WriteFile(bak, original, 0600); err != nil {
 		return fail(fmt.Errorf("migrate: write backup: %w", err))
@@ -166,6 +182,23 @@ func MigrateLegacy(dir string) (migrated bool, err error) {
 		return fail(fmt.Errorf("migrate: chmod backup: %w", err))
 	}
 	// From here on nothing is removed (see the doc comment).
+	for _, d := range movedDomains {
+		if !merge[d] {
+			continue
+		}
+		b := out[d]
+		err := NewWriter(filepath.Join(dir, d.File())).Update(func(doc *yaml.Node) error {
+			var merged yaml.Node
+			if err := yaml.Unmarshal(b, &merged); err != nil {
+				return err
+			}
+			*doc = merged
+			return nil
+		})
+		if err != nil {
+			return false, fmt.Errorf("migrate: merge into %s (the next start resumes): %w", d.File(), err)
+		}
+	}
 	err = NewWriter(appPath).Update(func(d *yaml.Node) error {
 		var trimmed yaml.Node
 		if err := yaml.Unmarshal(out[DomainApp], &trimmed); err != nil {
@@ -182,6 +215,40 @@ func MigrateLegacy(dir string) (migrated bool, err error) {
 			DomainApp.File(), err)
 	}
 	return true, nil
+}
+
+// mergeMoved adds the key/value pairs of moved that existing lacks. ok is
+// false when existing holds one of the keys with a different value (or is not
+// a mapping); changed is false when nothing was missing.
+func mergeMoved(existing []byte, moved []*yaml.Node) (merged []byte, changed, ok bool, err error) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(existing, &doc); err != nil {
+		return nil, false, false, err
+	}
+	if doc.Kind == 0 {
+		doc = yaml.Node{Kind: yaml.DocumentNode, Content: []*yaml.Node{{Kind: yaml.MappingNode}}}
+	}
+	root := rootMapping(&doc)
+	if root == nil {
+		return nil, false, false, nil
+	}
+	for i := 0; i+1 < len(moved); i += 2 {
+		k, v := moved[i], moved[i+1]
+		if j := findKey(root, k.Value); j >= 0 {
+			var a, b any
+			if root.Content[j].Decode(&a) != nil || v.Decode(&b) != nil || !reflect.DeepEqual(a, b) {
+				return nil, false, false, nil
+			}
+			continue
+		}
+		root.Content = append(root.Content, k, v)
+		changed = true
+	}
+	if !changed {
+		return existing, false, true, nil
+	}
+	merged, err = encodeYAML(&doc)
+	return merged, true, err == nil, err
 }
 
 // checkMigrated loads the would-be directory (out over the files already in
@@ -213,7 +280,9 @@ func checkMigrated(dir string, original []byte, out map[Domain][]byte, move map[
 		}
 	}
 	for _, d := range check {
-		if !reflect.DeepEqual(projection(got, d), projection(want, d)) {
+		// Only the moved keys: an existing target file's other values are
+		// not part of this migration.
+		if !reflect.DeepEqual(projectionOf(got, d, move[d]), projectionOf(want, d, move[d])) {
 			return fmt.Errorf("migrate: migrated %s would change values; nothing was changed", d.File())
 		}
 	}
@@ -253,8 +322,8 @@ func writeNew(p string, b []byte) error {
 	return err
 }
 
-// LegacyKeys returns the planner and calendars keys still present in dir's
-// config.yaml. They are ignored on load (each domain is read only from its
+// LegacyKeys returns the planner and calendars keys (including agent and
+// oauth) still present in dir's config.yaml. They are ignored on load (each domain is read only from its
 // own file); MigrateLegacy moves them or refuses, so after it succeeds this
 // is normally empty. Errors yield nil.
 func LegacyKeys(dir string) []string {

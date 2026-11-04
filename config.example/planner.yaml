@@ -1,4 +1,4 @@
-# Planner: working hours, lunch, focus and generated-event colors.
+# Planner: working hours, lunch, focus, scheduler agent and generated-event colors.
 # Portable: copy with the rest of the config directory.
 
 working_hours:
@@ -27,3 +27,12 @@ focus:
 # Generated-event colors by event kind (optional).
 # colors:
 #   focus: "#4f7cff"
+
+# Scheduler agent — any OpenAI-compatible endpoint (docs/scheduler-agent.md).
+# Defaults shown; uncomment to change. Put api_key in .env as
+# FOCACAL_AGENT_API_KEY, never here.
+# agent:
+#   base_url: "http://localhost:11434/v1"
+#   model: "qwen2.5:14b"
+#   timeout_secs: 120
+#   max_tokens: 4096

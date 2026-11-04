@@ -51,7 +51,7 @@ type appAuth struct {
 	Enabled bool `json:"enabled"`
 }
 
-// appAgent is AgentConfig without its api_key, which belongs in .env.
+// appAgent (the Planner domain's agent block) is AgentConfig without its api_key, which belongs in .env.
 type appAgent struct {
 	BaseURL     string `json:"base_url"`
 	Model       string `json:"model"`
@@ -62,11 +62,6 @@ type appAgent struct {
 var domainKeys = map[Domain][]domainKey{
 	DomainApp: {
 		{name: "server", typ: reflect.TypeFor[ServerConfig](), get: func(c *Config) any { return c.Server }},
-		{name: "agent", typ: reflect.TypeFor[appAgent](), get: func(c *Config) any {
-			a := c.Agent
-			return appAgent{BaseURL: a.BaseURL, Model: a.Model, TimeoutSecs: a.TimeoutSecs, MaxTokens: a.MaxTokens}
-		}},
-		{name: "oauth", typ: reflect.TypeFor[OAuthConfig](), get: func(c *Config) any { return c.OAuth }},
 		{name: "auth", typ: reflect.TypeFor[appAuth](), get: func(c *Config) any { return appAuth{Enabled: c.GlobalConfig.Auth.Enabled} }},
 	},
 	DomainPlanner: {
@@ -75,10 +70,16 @@ var domainKeys = map[Domain][]domainKey{
 		{name: "focus", typ: reflect.TypeFor[FocusConfig](), get: func(c *Config) any { return c.Focus }},
 		// colors is the generated-event palette keyed by event kind (spec 9.6).
 		{name: "colors", typ: reflect.TypeFor[map[string]string](), get: func(c *Config) any { return c.Colors }},
+		// agent is the scheduler endpoint; its api_key stays in .env.
+		{name: "agent", typ: reflect.TypeFor[appAgent](), get: func(c *Config) any {
+			a := c.Agent
+			return appAgent{BaseURL: a.BaseURL, Model: a.Model, TimeoutSecs: a.TimeoutSecs, MaxTokens: a.MaxTokens}
+		}},
 	},
 	DomainCalendars: {
 		{name: "sources", typ: reflect.TypeFor[SourceConfig](), collection: &SourcesSpec, get: func(c *Config) any { return c.Sources }},
 		{name: "destinations", typ: reflect.TypeFor[DestinationConfig](), collection: &DestinationsSpec, get: func(c *Config) any { return c.Destinations }},
+		{name: "oauth", typ: reflect.TypeFor[OAuthConfig](), get: func(c *Config) any { return c.OAuth }},
 	},
 }
 

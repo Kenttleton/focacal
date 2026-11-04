@@ -143,9 +143,9 @@ func readFile(t *testing.T, p string) string {
 func TestGetConfigDomains(t *testing.T) {
 	s, _ := newConfigTestServer(t)
 	want := map[string][]string{
-		"app":       {"server", "agent", "oauth", "auth"},
-		"planner":   {"working_hours", "lunch", "focus", "colors"},
-		"calendars": {"sources", "destinations"},
+		"app":       {"server", "auth"},
+		"planner":   {"working_hours", "lunch", "focus", "colors", "agent"},
+		"calendars": {"sources", "destinations", "oauth"},
 	}
 	for domain, keys := range want {
 		t.Run(domain, func(t *testing.T) {

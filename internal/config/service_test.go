@@ -194,8 +194,8 @@ func TestGetAppAndPlannerViews(t *testing.T) {
 	if auth := obj(t, m, "values", "auth"); len(auth) != 1 || auth["enabled"] != true {
 		t.Errorf("auth view = %v, want only enabled", auth)
 	}
-	if _, ok := obj(t, m, "values", "agent")["api_key"]; ok {
-		t.Error("agent.api_key must not be exposed")
+	if _, ok := obj(t, m, "values")["agent"]; ok {
+		t.Error("app view must not include agent (planner key)")
 	}
 	if _, ok := obj(t, m, "values")["working_hours"]; ok {
 		t.Error("app view must not include planner keys")
@@ -206,6 +206,9 @@ func TestGetAppAndPlannerViews(t *testing.T) {
 		t.Fatal(err)
 	}
 	m = asMap(t, pl)
+	if _, ok := obj(t, m, "values", "agent")["api_key"]; ok {
+		t.Error("agent.api_key must not be exposed")
+	}
 	if tz := obj(t, m, "values", "working_hours")["timezone"]; tz != "America/New_York" {
 		t.Errorf("timezone = %v", tz)
 	}
@@ -383,7 +386,7 @@ func TestPatchRejectsInlineSecrets(t *testing.T) {
 		"new ics source":       {DomainCalendars, `{"sources":{"new":{"type":"ics","ics_url":"https://x/y.ics"}}}`},
 		"destination password": {DomainCalendars, `{"destinations":{"work|primary":{"password":"x"}}}`},
 		"destination ics_url":  {DomainCalendars, `{"destinations":{"out|x":{"type":"ics","ics_url":"https://x"}}}`},
-		"agent api key":        {DomainApp, `{"agent":{"api_key":"sk-123"}}`},
+		"agent api key":        {DomainPlanner, `{"agent":{"api_key":"sk-123"}}`},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

@@ -11,6 +11,8 @@ func validConfig() *Config {
 	c.Lunch = LunchConfig{Preferred: "12:00", WindowStart: "11:30", WindowEnd: "13:30", DurationMinutes: 60}
 	c.Focus = FocusConfig{Style: "flexible", MinBlockMinutes: 30, MaxBlockMinutes: 120, BufferAroundMeetings: 10}
 	c.Server = ServerConfig{CalDAVPort: 5232, RESTPort: 5233, MCPPort: 5234, OAuthPort: 8080}
+	c.Agent = AgentConfig{BaseURL: "http://localhost:11434/v1", Model: "qwen2.5:14b", TimeoutSecs: 120, MaxTokens: 4096}
+	c.OAuth = OAuthConfig{RedirectBaseURL: "http://localhost:8080"}
 	return c
 }
 
@@ -133,5 +135,28 @@ func TestValidateJoinsAll(t *testing.T) {
 		if !strings.Contains(err.Error(), s) {
 			t.Errorf("missing %q in %v", s, err)
 		}
+	}
+}
+
+func TestValidate_AgentLivesInPlanner(t *testing.T) {
+	c := validConfig()
+	c.Agent.TimeoutSecs = 0
+	if err := c.ValidatePlanner(); err == nil || !strings.Contains(err.Error(), "agent.timeout_secs") {
+		t.Fatalf("ValidatePlanner = %v, want error naming agent.timeout_secs", err)
+	}
+	if err := c.ValidateApp(); err != nil {
+		t.Errorf("ValidateApp must not check agent: %v", err)
+	}
+
+	c = validConfig()
+	c.OAuth.RedirectBaseURL = "not a url"
+	if err := c.ValidateCalendars(); err == nil || !strings.Contains(err.Error(), "oauth.redirect_base_url") {
+		t.Fatalf("ValidateCalendars = %v, want error naming oauth.redirect_base_url", err)
+	}
+	if err := c.ValidateApp(); err != nil {
+		t.Errorf("ValidateApp must not check oauth: %v", err)
+	}
+	if err := c.ValidatePlanner(); err != nil {
+		t.Errorf("ValidatePlanner must not check oauth: %v", err)
 	}
 }
