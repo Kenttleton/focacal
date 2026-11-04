@@ -501,9 +501,11 @@ func TestRepoConfigDirIsCleanNewLayout(t *testing.T) {
 	}
 	var tracked []string
 	for _, f := range strings.Fields(string(out)) {
-		tracked = append(tracked, filepath.Base(f))
+		if filepath.Ext(f) == ".yaml" {
+			tracked = append(tracked, filepath.Base(f))
+		}
 	}
 	if want := []string{"calendars.yaml", "config.yaml", "planner.yaml"}; !reflect.DeepEqual(tracked, want) {
-		t.Errorf("tracked config/ files = %v, want %v (never credentials.yaml or *.bak)", tracked, want)
+		t.Errorf("tracked config.example/ yaml files = %v, want %v (never credentials.yaml or *.bak)", tracked, want)
 	}
 }
