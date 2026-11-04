@@ -25,8 +25,13 @@ func TestLoadStartAppliesEnvToRunningOnly(t *testing.T) {
 	if _, r2, err := LoadStart(dir); err != nil || r2.Agent.BaseURL != "http://ollama:11434/v1" {
 		t.Errorf("FOCACAL_AGENT_BASE_URL not applied: %v %+v", err, r2)
 	}
-	// pending_restart compares the files with started; env must not trip it.
-	svc, err := NewService(dir, started)
+	// pending_restart compares the file server block with the one at start;
+	// env must not trip it.
+	live, err := NewLive(dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc, err := NewService(dir, live)
 	if err != nil {
 		t.Fatal(err)
 	}

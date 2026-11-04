@@ -76,7 +76,11 @@ func newTestService(t *testing.T, dir string) (*Service, *Config) {
 	if err != nil {
 		t.Fatalf("LoadDir: %v", err)
 	}
-	svc, err := NewService(dir, started)
+	live, err := NewLive(dir, nil)
+	if err != nil {
+		t.Fatalf("NewLive: %v", err)
+	}
+	svc, err := NewService(dir, live)
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -226,7 +230,7 @@ func TestGetAppAndPlannerViews(t *testing.T) {
 	}
 }
 
-func TestPatchPlannerPersistsAndFlagsRestart(t *testing.T) {
+func TestPatchPlannerPersistsAndApplies(t *testing.T) {
 	dir := writeTestDir(t)
 	svc, started := newTestService(t, dir)
 
@@ -234,34 +238,46 @@ func TestPatchPlannerPersistsAndFlagsRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Patch: %v", err)
 	}
-	if !view.PendingRestart {
-		t.Error("PendingRestart should be true after a change")
+	if view.PendingRestart {
+		t.Error("a planner change applies live; it must not flag a restart")
 	}
 	if e := obj(t, asMap(t, view), "values", "working_hours")["end"]; e != "18:00" {
 		t.Errorf("patched view end = %v", e)
 	}
-
+	if e := svc.live.Current().WorkingHours.End; e != "18:00" {
+		t.Errorf("running config end = %q, want 18:00 (Patch reloads)", e)
+	}
 	got, err := svc.Get(DomainPlanner)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if e := obj(t, asMap(t, got), "values", "working_hours")["end"]; e != "18:00" || !got.PendingRestart {
-		t.Errorf("Get after patch: end=%v pending=%v", e, got.PendingRestart)
+	if e := obj(t, asMap(t, got), "values", "working_hours")["end"]; e != "18:00" {
+		t.Errorf("Get after patch: end=%v", e)
 	}
 	if started.WorkingHours.End != "17:00" {
 		t.Errorf("started config mutated: end = %q", started.WorkingHours.End)
 	}
-	if cal, _ := svc.Get(DomainCalendars); cal.PendingRestart {
-		t.Error("calendars untouched, should not be pending")
-	}
+}
 
-	// Reverting to the started value clears the flag.
-	view, err = svc.Patch(DomainPlanner, []byte(`{"working_hours":{"end":"17:00"}}`))
+func TestPatchServerFlagsRestartAndRevertClears(t *testing.T) {
+	dir := writeTestDir(t)
+	svc, _ := newTestService(t, dir)
+	view, err := svc.Patch(DomainApp, []byte(`{"server":{"rest_port":5300}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !view.PendingRestart {
+		t.Error("server change should flag a restart")
+	}
+	if cal, _ := svc.Get(DomainCalendars); !cal.PendingRestart {
+		t.Error("the flag is process-wide, calendars view should show it too")
+	}
+	view, err = svc.Patch(DomainApp, []byte(`{"server":{"rest_port":5233}}`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if view.PendingRestart {
-		t.Error("PendingRestart should clear when saved equals started")
+		t.Error("reverting to the started value should clear the flag")
 	}
 }
 
@@ -440,8 +456,8 @@ func TestPatchCalendarsAddsDestinationFromKey(t *testing.T) {
 	if d["id"] != "out" || d["calendar_id"] != "team" {
 		t.Errorf("identity not derived from key: %v", d)
 	}
-	if !view.PendingRestart {
-		t.Error("expected pending restart")
+	if view.PendingRestart {
+		t.Error("a calendars change applies live; no restart expected")
 	}
 }
 
@@ -534,7 +550,11 @@ func TestConfigDirIsSelfContained(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadDir(copy): %v", err)
 	}
-	svc, err := NewService(dst, got)
+	live, err := NewLive(dst, nil)
+	if err != nil {
+		t.Fatalf("NewLive(copy): %v", err)
+	}
+	svc, err := NewService(dst, live)
 	if err != nil {
 		t.Fatalf("NewService(copy): %v", err)
 	}
@@ -662,31 +682,28 @@ func TestPatchRestrictsReferences(t *testing.T) {
 	}
 }
 
-func TestPendingRestartClearsAfterAddThenDelete(t *testing.T) {
+func TestPatchAddThenDeleteDoesNotFlagRestart(t *testing.T) {
 	dir := t.TempDir()
-	started, err := LoadDir(dir)
+	live, err := NewLive(dir, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	svc, err := NewService(dir, started)
+	svc, err := NewService(dir, live)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v, _ := svc.Patch(DomainCalendars, []byte(`{"sources":{"c":{"type":"google"}}}`)); !v.PendingRestart {
-		t.Fatal("add should be pending")
+	if v, err := svc.Patch(DomainCalendars, []byte(`{"sources":{"c":{"type":"google"}}}`)); err != nil || v.PendingRestart {
+		t.Fatalf("add: err %v pending %v", err, v.PendingRestart)
+	}
+	if len(live.Current().Sources) != 1 {
+		t.Errorf("running sources = %d, want 1", len(live.Current().Sources))
 	}
 	v, err := svc.Patch(DomainCalendars, []byte(`{"sources":{"c":null}}`))
-	if err != nil {
-		t.Fatal(err)
+	if err != nil || v.PendingRestart {
+		t.Fatalf("delete: err %v pending %v", err, v.PendingRestart)
 	}
-	if v.PendingRestart {
-		t.Error("empty list equals the started nil list; pending should be false")
-	}
-	if v, _ := svc.Patch(DomainPlanner, []byte(`{"colors":{"x":"#111111"}}`)); !v.PendingRestart {
-		t.Fatal("color add should be pending")
-	}
-	if v, _ := svc.Patch(DomainPlanner, []byte(`{"colors":{"x":null}}`)); v.PendingRestart {
-		t.Error("empty colors map equals started nil map; pending should be false")
+	if len(live.Current().Sources) != 0 {
+		t.Errorf("running sources = %d, want 0", len(live.Current().Sources))
 	}
 }
 

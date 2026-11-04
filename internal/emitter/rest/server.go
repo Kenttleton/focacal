@@ -82,8 +82,8 @@ const DefaultRecoveryKeyPath = "/data/recovery.key"
 // the search path; there is no implicit default.
 func (s *Server) SetConfigDir(dir string) { s.configDir = dir }
 
-// SetConfigService sets the Service over the config directory, built from the
-// env-free startup snapshot so pending_restart is accurate.
+// SetConfigService sets the Service over the config directory, built over the
+// process's config.Live, which supplies pending_restart and load_error.
 func (s *Server) SetConfigService(svc *config.Service) { s.configSvc = svc }
 
 // SetRecoveryKeyPath overrides DefaultRecoveryKeyPath (tests use a temp file).

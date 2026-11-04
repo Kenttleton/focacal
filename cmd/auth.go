@@ -42,10 +42,12 @@ func runAuth(_ *cobra.Command, args []string) error {
 	provider := args[0]
 	sourceID := args[1]
 
-	_, _, cfg, err := loadConfig(newLogger())
+	_, live, err := loadConfig(newLogger())
 	if err != nil {
 		return err
 	}
+
+	cfg := live.Current()
 
 	// Find the source config entry.
 	var srcCfg *config.SourceConfig

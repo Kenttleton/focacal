@@ -39,15 +39,14 @@ func init() {
 func runStart(_ *cobra.Command, _ []string) error {
 	log := newLogger()
 
-	// started is env-free: config.NewService compares it with the files on
-	// disk for pending_restart, so env overrides must never be applied to it.
-	// cfg has env overrides applied and is what the process runs with.
-	configDir, started, cfg, err := loadConfig(log)
+	configDir, live, err := loadConfig(log)
 	if err != nil {
 		return err
 	}
+	// Consumers still read this one snapshot; they move to live in a later step.
+	cfg := live.Current()
 	log.Info("config loaded", "dir", configDir)
-	configSvc, err := config.NewService(configDir, started)
+	configSvc, err := config.NewService(configDir, live)
 	if err != nil {
 		return fmt.Errorf("config service: %w", err)
 	}

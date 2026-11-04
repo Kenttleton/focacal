@@ -69,11 +69,11 @@ func newConfigTestServerLog(t *testing.T, logOut io.Writer) (*Server, string) {
 			t.Fatal(err)
 		}
 	}
-	started, err := config.LoadDir(dir)
+	live, err := config.NewLive(dir, nil)
 	if err != nil {
-		t.Fatalf("LoadDir: %v", err)
+		t.Fatalf("NewLive: %v", err)
 	}
-	svc, err := config.NewService(dir, started)
+	svc, err := config.NewService(dir, live)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,6 +105,7 @@ type viewResp struct {
 	Values         map[string]any      `json:"values"`
 	Order          map[string][]string `json:"order"`
 	PendingRestart bool                `json:"pending_restart"`
+	LoadError      string              `json:"load_error"`
 }
 
 func decodeView(t *testing.T, rec *httptest.ResponseRecorder) viewResp {
@@ -203,8 +204,8 @@ func TestPatchPlannerValid(t *testing.T) {
 		t.Fatalf("PATCH = %d %s", rec.Code, rec.Body)
 	}
 	v := decodeView(t, rec)
-	if !v.PendingRestart {
-		t.Errorf("pending_restart = false, want true")
+	if v.PendingRestart {
+		t.Errorf("pending_restart = true; planner changes apply live")
 	}
 	if wh := v.Values["working_hours"].(map[string]any); wh["start"] != "08:30" || wh["end"] != "17:00" {
 		t.Errorf("working_hours = %v", wh)
@@ -219,8 +220,8 @@ func TestPatchPlannerValid(t *testing.T) {
 
 	// GET now reflects the saved value.
 	rec = doReq(t, s, http.MethodGet, "/config/planner", nil)
-	if v := decodeView(t, rec); !v.PendingRestart {
-		t.Errorf("GET after PATCH: pending_restart = false")
+	if v := decodeView(t, rec); v.PendingRestart || v.LoadError != "" {
+		t.Errorf("GET after PATCH: pending_restart = %v load_error = %q", v.PendingRestart, v.LoadError)
 	}
 }
 

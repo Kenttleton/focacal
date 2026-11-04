@@ -47,26 +47,28 @@ type View struct {
 	// Order lists each collection's ids in file order, since JSON objects are
 	// unordered. Destination ids are "id|calendar_id".
 	Order map[string][]string `json:"order"`
-	// PendingRestart is true when the saved values differ from the ones the
-	// process started with.
+	// PendingRestart is true when the saved server block differs from the
+	// one the process started with (Live.RestartRequired). Every other
+	// setting applies live.
 	PendingRestart bool `json:"pending_restart"`
+	// LoadError is the last reload failure (the running config is still the
+	// last good one), empty when the files loaded cleanly.
+	LoadError string `json:"load_error"`
 }
 
 // Service reads and patches the domain files of one config directory.
-// Changes are written to disk only; the running config is not mutated.
+// Writes go to disk and then through Live.Reload, which applies them to the
+// running config.
 type Service struct {
 	dir     string
-	started *Config
+	live    *Live
 	writers map[Domain]*Writer
 }
 
 // NewService returns a Service over dir. Missing domain files are treated as
-// empty. started must be the env-free snapshot LoadStart returns as started
-// (file values over defaults, no environment overrides), not the running
-// config: Service compares it with the env-free files for pending_restart, so
-// env-overridden values would otherwise read as pending forever. It is never
-// modified. A nil started disables the flag.
-func NewService(dir string, started *Config) (*Service, error) {
+// empty. live supplies pending_restart and load_error; it may be nil (both
+// then read as unset, and Patch does not reload).
+func NewService(dir string, live *Live) (*Service, error) {
 	st, err := os.Stat(dir)
 	if err != nil {
 		return nil, fmt.Errorf("config dir: %w", err)
@@ -74,7 +76,7 @@ func NewService(dir string, started *Config) (*Service, error) {
 	if !st.IsDir() {
 		return nil, fmt.Errorf("config dir %s: not a directory", dir)
 	}
-	s := &Service{dir: dir, started: started, writers: map[Domain]*Writer{}}
+	s := &Service{dir: dir, live: live, writers: map[Domain]*Writer{}}
 	for _, d := range Domains {
 		s.writers[d] = NewWriter(filepath.Join(dir, d.File()))
 	}
@@ -127,6 +129,12 @@ func (s *Service) Get(d Domain) (View, error) {
 	}
 	cfg, err := loadFiles(files)
 	if err != nil {
+		// A file that no longer parses: show the last good values with the
+		// recorded error rather than failing the read, so a UI can display
+		// load_error.
+		if s.live != nil && s.live.LoadError() != nil {
+			return s.view(d, s.live.fileConfig())
+		}
 		return View{}, err
 	}
 	return s.view(d, cfg)
@@ -203,6 +211,14 @@ func (s *Service) Patch(d Domain, body []byte) (View, error) {
 	})
 	if err != nil {
 		return View{}, err
+	}
+	// Apply the write now so the file watcher finds nothing left to do. A
+	// failure here does not fail the request: the file is already written
+	// and valid for d, so the error means something outside this request
+	// (env, another domain, cross-domain validation) blocks the reload. It
+	// is logged by Live and reported through View.LoadError.
+	if s.live != nil {
+		_, _ = s.live.Reload()
 	}
 	return s.view(d, saved)
 }
@@ -284,8 +300,11 @@ func (s *Service) view(d Domain, cfg *Config) (View, error) {
 			return View{}, err
 		}
 	}
-	if s.started != nil {
-		v.PendingRestart = !reflect.DeepEqual(projection(cfg, d), projection(s.started, d))
+	if s.live != nil {
+		v.PendingRestart = s.live.RestartRequired()
+		if err := s.live.LoadError(); err != nil {
+			v.LoadError = err.Error()
+		}
 	}
 	return v, nil
 }

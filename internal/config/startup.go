@@ -141,6 +141,11 @@ func isDir(p string) bool  { st, err := os.Stat(p); return err == nil && st.IsDi
 //
 // Both are validated.
 func LoadStart(dir string) (started, running *Config, err error) {
+	return loadSnapshot(dir)
+}
+
+// loadSnapshot is LoadStart's body; Live reuses it for every (re)load.
+func loadSnapshot(dir string) (started, running *Config, err error) {
 	files, err := readDomainFiles(dir)
 	if err != nil {
 		return nil, nil, err
