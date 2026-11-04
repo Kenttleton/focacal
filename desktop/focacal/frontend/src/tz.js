@@ -1,5 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
-import { api } from './api'
+import { useCallback, useState } from 'react'
 
 const LS_KEY = 'fc_display_tz'
 
@@ -25,30 +24,17 @@ export function calloutParts(date, tz) {
 }
 
 // The server owns event times; this only chooses which zone the UI renders them
-// in. An empty override means "follow the detected zone". The override is saved
-// to config.yaml (display_timezone) and mirrored in localStorage so the UI
-// renders correctly before the config call returns or on an older server.
-export function useDisplayTimezone(enabled) {
+// in. An empty override means "follow the detected zone". The override is a
+// per-browser preference kept in localStorage only; the server never sees it.
+export function useDisplayTimezone() {
   const [override, setOverrideState] = useState(() => {
     try { return localStorage.getItem(LS_KEY) || '' } catch { return '' }
   })
   const detected = detectTimezone()
 
-  useEffect(() => {
-    if (!enabled) return
-    api('/config').then(cfg => {
-      if (typeof cfg?.display_timezone !== 'string') return
-      setOverrideState(cfg.display_timezone)
-      try { localStorage.setItem(LS_KEY, cfg.display_timezone) } catch {}
-    }).catch(() => {})
-  }, [enabled])
-
-  const setOverride = useCallback(async (tz) => {
+  const setOverride = useCallback((tz) => {
     setOverrideState(tz)
     try { tz ? localStorage.setItem(LS_KEY, tz) : localStorage.removeItem(LS_KEY) } catch {}
-    try {
-      await api('/config', { method: 'PATCH', body: JSON.stringify({ display_timezone: tz }) })
-    } catch {}
   }, [])
 
   const effective = override && isValidTimezone(override) ? override : detected

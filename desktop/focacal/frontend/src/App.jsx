@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { ActionIcon, Button, Group, Select, Text, Tooltip } from '@mantine/core'
 import { useMediaQuery } from '@mantine/hooks'
 import { IconChevronLeft, IconChevronRight, IconLayoutSidebar } from '@tabler/icons-react'
-import { api, clearToken, getToken, ymd } from './api'
+import { api, clearToken, getToken, loadCalendars, ymd } from './api'
 import { colorFor, FOCACAL_SOURCE, sourceColors } from './colors'
 import { calloutParts, useDisplayTimezone } from './tz'
 import CalendarView from './CalendarView'
@@ -39,13 +39,15 @@ export default function App() {
   const [sel, setSel] = useState(null)
   const calRef = useRef(null)
   const now = useNow()
-  const zone = useDisplayTimezone(authed)
+  const zone = useDisplayTimezone()
 
   useEffect(() => {
     if (!authed) return
     api('/health').catch(() => { clearToken(); setAuthed(false) })
-    api('/sources').then(s => setSources(s || [])).catch(() => {})
-    api('/config').then(setCfg).catch(() => {})
+    // 401 clears the token in api(); 503 (config service unavailable) and other
+    // failures leave the defaults: no sources listed, 09:00 working-hours start.
+    loadCalendars().then(c => setSources(c.sources)).catch(e => { if (e.message === 'unauthorized') setAuthed(false) })
+    api('/config/planner').then(v => setCfg(v?.values || null)).catch(e => { if (e.message === 'unauthorized') setAuthed(false) })
   }, [authed])
 
   // /events and /blocks take YYYY-MM-DD; /conflicts takes RFC 3339.

@@ -1,5 +1,5 @@
 // Calendar colors. Sources are assigned from this palette by position in
-// /sources; Focacal-generated blocks use fixed per-kind colors.
+// the calendars config order; Focacal-generated blocks use fixed per-kind colors.
 export const SOURCE_PALETTE = ['#0a84ff', '#bf5af2', '#ff9f0a', '#30d158', '#ff453a', '#64d2ff', '#ac8e68']
 
 export const KIND_COLORS = {
