@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"reflect"
+	"sync"
 	"syscall"
 	"time"
 
@@ -78,7 +79,7 @@ func runStart(_ *cobra.Command, _ []string) error {
 	build := func(src config.SourceConfig, redirectBase string) (connector.Connector, error) {
 		return buildConnector(src, db, redirectBase)
 	}
-	reconcileConnectors(reg, nil, cfg, build, log)
+	reconcileConnectors(reg, nil, live.Current(), build, log)
 
 	// Build emitters.
 	caldavAddr := fmt.Sprintf("%s:%d", cfg.Server.BindAddress, cfg.Server.CalDAVPort)
@@ -139,8 +140,6 @@ func runStart(_ *cobra.Command, _ []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	go func() { _ = live.Watch(ctx) }()
-
 	// Inject the single-user store, config, and bus into the root context so that
 	// all HTTP request contexts (via BaseContext) and background goroutines can
 	// retrieve them without holding direct references.
@@ -148,12 +147,6 @@ func runStart(_ *cobra.Command, _ []string) error {
 	// Resolved per call so planner/sync callers always see the live values.
 	ctx = config.WithUserConfigFunc(ctx, func() *config.UserConfig { return &live.Current().UserConfig })
 	ctx = bus.WithDispatcher(ctx, b)
-
-	// Start all servers concurrently.
-	errCh := make(chan error, 4)
-	go func() { errCh <- caldavSrv.Start(ctx) }()
-	go func() { errCh <- restSrv.Start(ctx) }()
-	go func() { errCh <- mcpSrv.Start(ctx) }()
 
 	// Background sync: initial sync then poll every 5 minutes. The connector
 	// set and webhook base URL are re-read from live config on every tick.
@@ -192,6 +185,15 @@ func runStart(_ *cobra.Command, _ []string) error {
 			b.Publish(bus.Message{Type: bus.EventReplanRequested, RequestID: newRequestID()})
 		}
 	})
+
+	// Registered before the watcher and the servers start so no reload is missed.
+	go func() { _ = live.Watch(ctx) }()
+
+	// Start all servers concurrently.
+	errCh := make(chan error, 4)
+	go func() { errCh <- caldavSrv.Start(ctx) }()
+	go func() { errCh <- restSrv.Start(ctx) }()
+	go func() { errCh <- mcpSrv.Start(ctx) }()
 
 	go func() {
 		syncCycle()
@@ -280,7 +282,7 @@ func syncOnly(ctx context.Context, log *slog.Logger, reg *connector.Registry, id
 func syncConnectors(ctx context.Context, log *slog.Logger, reg *connector.Registry, conns map[string]connector.Connector, b *bus.Bus) {
 	changed := false
 	for id, c := range conns {
-		err := c.Sync(ctx)
+		err := syncInstance(ctx, c)
 		if cur, ok := reg.Get(id); !ok || cur != c {
 			log.Info("sync result discarded, source removed or replaced during sync", "source", id)
 			continue
@@ -299,6 +301,41 @@ func syncConnectors(ctx context.Context, log *slog.Logger, reg *connector.Regist
 			RequestID: newRequestID(),
 		})
 	}
+}
+
+// managed wraps a connector instance with what the sync loop needs: a mutex
+// that serialises Sync calls on this instance, and a context cancelled when
+// reconcile drops or replaces the instance.
+type managed struct {
+	connector.Connector
+	mu     sync.Mutex
+	ctx    context.Context
+	cancel context.CancelFunc
+}
+
+func newManaged(c connector.Connector) *managed {
+	ctx, cancel := context.WithCancel(context.Background())
+	return &managed{Connector: c, ctx: ctx, cancel: cancel}
+}
+
+// syncInstance runs Sync on c. Concurrent requests for the same instance wait
+// their turn (so a requested sync always runs after the one in flight). The
+// Sync context is cancelled if the instance is dropped or replaced meanwhile.
+func syncInstance(ctx context.Context, c connector.Connector) error {
+	m, ok := c.(*managed)
+	if !ok {
+		return c.Sync(ctx)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.ctx.Err() != nil {
+		return m.ctx.Err()
+	}
+	sctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stop := context.AfterFunc(m.ctx, cancel)
+	defer stop()
+	return m.Connector.Sync(sctx)
 }
 
 // buildFunc constructs a connector for one source.
@@ -355,15 +392,26 @@ func reconcileConnectors(reg *connector.Registry, old, cur *config.Config, build
 				continue
 			}
 		}
-		c, err := build(src, redirectBase)
+		raw, err := build(src, redirectBase)
 		if err != nil {
-			log.Warn("init connector", "type", src.Type, "id", src.ID, "err", err)
+			// Constructor errors may embed URLs, paths or credentials: log the source
+			// only, never the error text.
+			log.Warn("init connector failed; check this source's settings", "type", src.Type, "id", src.ID)
 			continue
 		}
-		next[src.ID] = c
+		next[src.ID] = newManaged(raw)
 		added = append(added, src.ID)
 	}
 	reg.Replace(next)
+	// Cancel in-flight syncs of every instance that was dropped or replaced so
+	// it stops writing to the store.
+	for id, c := range existing {
+		if next[id] != c {
+			if m, ok := c.(*managed); ok {
+				m.cancel()
+			}
+		}
+	}
 	return added
 }
 

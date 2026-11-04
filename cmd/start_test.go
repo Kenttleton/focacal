@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"reflect"
 	"slices"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,18 +20,33 @@ import (
 type fakeConn struct {
 	id       string
 	redirect string
-	syncHook func()
-	synced   int
+	// onSync, if set, runs inside Sync with the Sync context.
+	onSync func(ctx context.Context)
+
+	mu         sync.Mutex
+	synced     int
+	inSync     int
+	overlapped bool
 }
 
 func (f *fakeConn) SourceID() string { return f.id }
-func (f *fakeConn) Sync(context.Context) error {
+func (f *fakeConn) Sync(ctx context.Context) error {
+	f.mu.Lock()
 	f.synced++
-	if f.syncHook != nil {
-		f.syncHook()
+	f.inSync++
+	if f.inSync > 1 {
+		f.overlapped = true
 	}
-	return nil
+	f.mu.Unlock()
+	if f.onSync != nil {
+		f.onSync(ctx)
+	}
+	f.mu.Lock()
+	f.inSync--
+	f.mu.Unlock()
+	return ctx.Err()
 }
+func (f *fakeConn) syncCount() int                                { f.mu.Lock(); defer f.mu.Unlock(); return f.synced }
 func (f *fakeConn) RegisterWebhook(context.Context, string) error { return nil }
 func (f *fakeConn) ValidateWebhook(context.Context, []byte, map[string]string) (string, error) {
 	return f.id, nil
@@ -97,7 +114,7 @@ func TestReconcileRedirectBaseChangeRebuildsOAuthSources(t *testing.T) {
 		t.Fatalf("added = %v, want [g]", added)
 	}
 	g, _ := reg.Get("g")
-	if g.(*fakeConn).redirect != "https://b" {
+	if g.(*managed).Connector.(*fakeConn).redirect != "https://b" {
 		t.Fatal("rebuilt connector did not get new redirect base")
 	}
 }
@@ -153,7 +170,7 @@ func TestSyncDroppedConnectorDoesNotPublish(t *testing.T) {
 	got := make(chan bus.Message, 4)
 	b.Subscribe(func(m bus.Message) { got <- m })
 	c := &fakeConn{id: "a"}
-	c.syncHook = func() { reg.Replace(map[string]connector.Connector{}) } // removed mid-sync
+	c.onSync = func(context.Context) { reg.Replace(map[string]connector.Connector{}) } // removed mid-sync
 	reg.Replace(map[string]connector.Connector{"a": c})
 	syncOnly(context.Background(), discardLog(), reg, []string{"a"}, b)
 	select {
@@ -161,8 +178,8 @@ func TestSyncDroppedConnectorDoesNotPublish(t *testing.T) {
 		t.Fatalf("published %v for a removed source", m.Type)
 	case <-time.After(100 * time.Millisecond):
 	}
-	if c.synced != 1 {
-		t.Fatalf("synced = %d", c.synced)
+	if c.syncCount() != 1 {
+		t.Fatalf("synced = %d", c.syncCount())
 	}
 }
 
@@ -182,8 +199,8 @@ func TestSyncOnlyPublishesForLiveConnector(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("no change event")
 	}
-	if a.synced != 1 || o.synced != 0 {
-		t.Fatalf("synced a=%d o=%d", a.synced, o.synced)
+	if a.syncCount() != 1 || o.syncCount() != 0 {
+		t.Fatalf("synced a=%d o=%d", a.syncCount(), o.syncCount())
 	}
 }
 
@@ -200,5 +217,97 @@ func TestPlannerInputsChanged(t *testing.T) {
 	c.OAuth.RedirectBaseURL = "x"
 	if plannerInputsChanged(a, c) {
 		t.Fatal("oauth change should not replan")
+	}
+}
+
+// registerFake builds a registry whose single source "a" wraps f.
+func registerFake(f *fakeConn) (*connector.Registry, *config.Config) {
+	reg := connector.NewRegistry()
+	cfg := cfgWith(config.SourceConfig{ID: "a", Type: "ics"})
+	reconcileConnectors(reg, nil, cfg, func(config.SourceConfig, string) (connector.Connector, error) { return f, nil }, discardLog())
+	return reg, cfg
+}
+
+func TestSyncSerialisedPerInstance(t *testing.T) {
+	f := &fakeConn{id: "a", onSync: func(context.Context) { time.Sleep(30 * time.Millisecond) }}
+	reg, _ := registerFake(f)
+	b := bus.New(10 * time.Millisecond)
+	var wg sync.WaitGroup
+	for i := 0; i < 3; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			syncOnly(context.Background(), discardLog(), reg, []string{"a"}, b)
+		}()
+	}
+	wg.Wait()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.overlapped {
+		t.Fatal("Sync ran concurrently on one instance")
+	}
+	if f.synced != 3 {
+		t.Fatalf("synced = %d, want 3 (waiters still run)", f.synced)
+	}
+}
+
+func testDroppedSyncCancelled(t *testing.T, next func(reg *connector.Registry, old *config.Config)) {
+	t.Helper()
+	started := make(chan struct{})
+	cancelled := make(chan struct{})
+	f := &fakeConn{id: "a", onSync: func(ctx context.Context) {
+		close(started)
+		<-ctx.Done()
+		close(cancelled)
+	}}
+	reg, old := registerFake(f)
+	b := bus.New(10 * time.Millisecond)
+	got := make(chan bus.Message, 4)
+	b.Subscribe(func(m bus.Message) { got <- m })
+	done := make(chan struct{})
+	go func() {
+		syncOnly(context.Background(), discardLog(), reg, []string{"a"}, b)
+		close(done)
+	}()
+	<-started
+	next(reg, old)
+	select {
+	case <-cancelled:
+	case <-time.After(time.Second):
+		t.Fatal("in-flight Sync context was not cancelled")
+	}
+	<-done
+	select {
+	case m := <-got:
+		t.Fatalf("published %v for a dropped instance", m.Type)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func TestReconcileRemoveCancelsInFlightSync(t *testing.T) {
+	testDroppedSyncCancelled(t, func(reg *connector.Registry, old *config.Config) {
+		reconcileConnectors(reg, old, cfgWith(), nil, discardLog())
+	})
+}
+
+func TestReconcileReplaceCancelsInFlightSync(t *testing.T) {
+	testDroppedSyncCancelled(t, func(reg *connector.Registry, old *config.Config) {
+		changed := cfgWith(config.SourceConfig{ID: "a", Type: "ics", Label: "new"})
+		build, _ := fakeBuild()
+		reconcileConnectors(reg, old, changed, build, discardLog())
+	})
+}
+
+func TestReconcileBuildErrorNotLogged(t *testing.T) {
+	var buf strings.Builder
+	log := slog.New(slog.NewTextHandler(&buf, nil))
+	secret := "https://user:hunter2@cal.example.com/dav"
+	build := func(config.SourceConfig, string) (connector.Connector, error) {
+		return nil, errors.New("dial " + secret)
+	}
+	reconcileConnectors(connector.NewRegistry(), nil, cfgWith(config.SourceConfig{ID: "a", Type: "caldav"}), build, log)
+	out := buf.String()
+	if !strings.Contains(out, "a") || strings.Contains(out, "hunter2") || strings.Contains(out, "example.com") {
+		t.Fatalf("log output leaks or lacks id: %q", out)
 	}
 }
