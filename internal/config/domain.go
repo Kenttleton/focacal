@@ -47,6 +47,10 @@ type domainKey struct {
 	collection *CollectionSpec
 	// get returns the typed value of this key from c.
 	get func(c *Config) any
+	// write, when set, returns the value marshalDomain saves. It is wider
+	// than get where a hand-written secret (inline api_key) must survive a
+	// save although the API view never shows it.
+	write func(c *Config) any
 }
 
 // appAuth is the part of auth that belongs to the App domain. Login
@@ -66,7 +70,8 @@ type plannerAgent struct {
 var domainKeys = map[Domain][]domainKey{
 	DomainApp: {
 		{name: "server", typ: reflect.TypeFor[ServerConfig](), get: func(c *Config) any { return c.Server }},
-		{name: "auth", typ: reflect.TypeFor[appAuth](), get: func(c *Config) any { return appAuth{Enabled: c.GlobalConfig.Auth.Enabled} }},
+		{name: "auth", typ: reflect.TypeFor[appAuth](), get: func(c *Config) any { return appAuth{Enabled: c.GlobalConfig.Auth.Enabled} },
+			write: func(c *Config) any { return c.GlobalConfig.Auth }},
 	},
 	DomainPlanner: {
 		{name: "working_hours", typ: reflect.TypeFor[WorkingHours](), get: func(c *Config) any { return c.WorkingHours }},
@@ -78,7 +83,7 @@ var domainKeys = map[Domain][]domainKey{
 		{name: "agent", typ: reflect.TypeFor[plannerAgent](), get: func(c *Config) any {
 			a := c.Agent
 			return plannerAgent{BaseURL: a.BaseURL, Model: a.Model, TimeoutSecs: a.TimeoutSecs, MaxTokens: a.MaxTokens}
-		}},
+		}, write: func(c *Config) any { return c.Agent }},
 	},
 	DomainCalendars: {
 		{name: "sources", typ: reflect.TypeFor[SourceConfig](), collection: &SourcesSpec, get: func(c *Config) any { return c.Sources }},
@@ -126,8 +131,8 @@ func (d Domain) validate(c *Config) error {
 // marshalDomain renders exactly d's keys of c as YAML, in domainKeys order,
 // collections as lists in their existing order. The output is deterministic
 // (map-typed values such as colors are sorted by yaml) and carries no
-// comments. Secrets that live outside the domain file (the planner api_key)
-// are not part of d's keys and so never written.
+// comments. Inline api_key values already in the file are carried through
+// (the API view and patches never expose or accept them).
 func marshalDomain(d Domain, c *Config) ([]byte, error) {
 	if !d.Valid() {
 		return nil, fmt.Errorf("%w: %q", ErrUnknownDomain, d)
@@ -135,7 +140,11 @@ func marshalDomain(d Domain, c *Config) ([]byte, error) {
 	root := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
 	for _, dk := range domainKeys[d] {
 		var v yaml.Node
-		if err := v.Encode(dk.get(c)); err != nil {
+		val := dk.get
+		if dk.write != nil {
+			val = dk.write
+		}
+		if err := v.Encode(val(c)); err != nil {
 			return nil, fmt.Errorf("encode %s: %w", dk.name, err)
 		}
 		root.Content = append(root.Content,

@@ -80,7 +80,7 @@ type FocusConfig struct {
 type AgentConfig struct {
 	BaseURL     string `json:"base_url" yaml:"base_url"`         // e.g. http://localhost:11434/v1
 	Model       string `json:"model" yaml:"model"`               // e.g. qwen2.5:14b, gpt-4o, claude-sonnet-4-6
-	APIKey      string `json:"api_key" yaml:"api_key"`           // leave empty for local/unauthenticated endpoints
+	APIKey      string `json:"api_key" yaml:"api_key,omitempty"` // leave empty for local/unauthenticated endpoints
 	TimeoutSecs int    `json:"timeout_secs" yaml:"timeout_secs"` // 120
 	MaxTokens   int    `json:"max_tokens" yaml:"max_tokens"`     // 4096
 }
@@ -227,8 +227,8 @@ type OAuthConfig struct {
 // AuthConfig controls the lightweight OSS authentication layer.
 // Set enabled=false for trusted LAN deployments that need no protection.
 type AuthConfig struct {
-	Enabled bool   `json:"enabled" yaml:"enabled"` // default true
-	APIKey  string `json:"api_key" yaml:"api_key"` // legacy static key (backward compat)
+	Enabled bool   `json:"enabled" yaml:"enabled"`           // default true
+	APIKey  string `json:"api_key" yaml:"api_key,omitempty"` // legacy static key (backward compat)
 	// Login credentials (username, password_hash) live in credentials.yaml;
 	// see LoadCredentials.
 }

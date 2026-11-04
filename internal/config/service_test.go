@@ -904,3 +904,78 @@ func TestMarshalDomainDeterministicAndScoped(t *testing.T) {
 		t.Error("round trip changed calendars")
 	}
 }
+
+func TestPatchKeepsInlineAPIKeys(t *testing.T) {
+	dir := writeTestDir(t)
+	app := testAppYAML + "  api_key: abc\n"
+	pl := testPlannerYAML + "agent:\n  base_url: http://x/v1\n  api_key: sk-xyz\n"
+	os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(app), 0644)
+	os.WriteFile(filepath.Join(dir, "planner.yaml"), []byte(pl), 0644)
+	svc, _ := newTestService(t, dir)
+
+	if _, err := svc.Patch(DomainApp, []byte(`{"server":{"rest_port":5240}}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Patch(DomainPlanner, []byte(`{"working_hours":{"end":"18:00"}}`)); err != nil {
+		t.Fatal(err)
+	}
+	a, _ := os.ReadFile(filepath.Join(dir, "config.yaml"))
+	p, _ := os.ReadFile(filepath.Join(dir, "planner.yaml"))
+	if !strings.Contains(string(a), "api_key: abc") || !strings.Contains(string(p), "api_key: sk-xyz") {
+		t.Errorf("inline api_key lost:\n%s\n%s", a, p)
+	}
+
+	for _, c := range []struct {
+		d    Domain
+		body string
+	}{
+		{DomainApp, `{"auth":{"api_key":"n"}}`},
+		{DomainPlanner, `{"agent":{"api_key":"n"}}`},
+	} {
+		if _, err := svc.Patch(c.d, []byte(c.body)); err == nil {
+			t.Errorf("%s: api_key patch accepted", c.body)
+		}
+	}
+	for _, d := range []Domain{DomainApp, DomainPlanner} {
+		v, err := svc.Get(d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if b, _ := json.Marshal(v); strings.Contains(string(b), "api_key") || strings.Contains(string(b), "abc") || strings.Contains(string(b), "sk-xyz") {
+			t.Errorf("%s view shows api_key: %s", d, b)
+		}
+	}
+}
+
+func TestMarshalDomainRoundTripAppPlanner(t *testing.T) {
+	cfg := Defaults()
+	cfg.Auth.Enabled = false
+	cfg.Auth.APIKey = "k"
+	cfg.Server.WebhooksEnabled = false
+	cfg.Server.OAuthPort = 0
+	cfg.Server.BindAddress = ""
+	cfg.WorkingHours.Start = "09:00"
+	cfg.Lunch.DurationMinutes = 0
+	cfg.Focus.BufferAroundMeetings = 0
+	cfg.Agent.APIKey = "sk"
+	cfg.Agent.MaxTokens = 0
+	cfg.Colors = map[string]string{"focus": "#00aa00"}
+	for _, d := range []Domain{DomainApp, DomainPlanner} {
+		b, err := marshalDomain(d, cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := Defaults()
+		if err := decodeDomain(d, b, got); err != nil {
+			t.Fatalf("%s: %v\n%s", d, err, b)
+		}
+		for _, dk := range domainKeys[d] {
+			if !reflect.DeepEqual(dk.get(got), dk.get(cfg)) {
+				t.Errorf("%s.%s: %v != %v\n%s", d, dk.name, dk.get(got), dk.get(cfg), b)
+			}
+		}
+		if d == DomainApp && got.Auth != cfg.Auth || d == DomainPlanner && got.Agent != cfg.Agent {
+			t.Errorf("%s: secret fields lost", d)
+		}
+	}
+}

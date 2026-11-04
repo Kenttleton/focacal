@@ -46,6 +46,7 @@ var DestinationsSpec = CollectionSpec{
 // in c are top-level collections: lists of maps in doc, objects keyed by item
 // identity in patch, where a null entry removes the item, an unknown key
 // appends a new item and a known key merges into the item where it stands.
+// On error doc may be partially modified; callers must discard it.
 // Values inserted from patch have nulls dropped and whole-number floats (as
 // JSON decodes them) turned into ints.
 func ApplyMergePatch(doc map[string]any, patch map[string]any, c map[string]CollectionSpec) error {
