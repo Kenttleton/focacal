@@ -241,7 +241,8 @@
             "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ConfigView" } } }
           },
           "404": { "description": "Unknown config domain", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
-          "500": { "description": "A config file on disk could not be read, parsed or written; details are in the server log", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+          "500": { "description": "A config file on disk could not be read, parsed or written; details are in the server log", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "503": { "description": "The config service is not available on this server", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
         }
       },
       "patch": {
@@ -270,7 +271,8 @@
           "404": { "description": "Unknown config domain", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
           "413": { "description": "Body larger than 1 MiB", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
           "422": { "description": "Validation failed (a bad value, a required value set to null, or an inline secret); nothing was written", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
-          "500": { "description": "A config file on disk could not be read, parsed or written; details are in the server log", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+          "500": { "description": "A config file on disk could not be read, parsed or written; details are in the server log", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "503": { "description": "The config service is not available on this server", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
         }
       }
     },

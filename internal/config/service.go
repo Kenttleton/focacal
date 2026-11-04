@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/mitchellh/mapstructure"
 	"github.com/spf13/viper"
 	"gopkg.in/yaml.v3"
 )
@@ -156,7 +157,7 @@ func loadFilesWith(files map[Domain][]byte, prep func(*viper.Viper)) (*Config, e
 	}
 	var cfg Config
 	if err := v.Unmarshal(&cfg); err != nil {
-		return nil, fmt.Errorf("unmarshal config: %w", err)
+		return nil, fmt.Errorf("unmarshal config: %w", redactDecodeError(err))
 	}
 	return &cfg, nil
 }
@@ -218,10 +219,13 @@ func (s *Service) Patch(d Domain, body []byte) (View, error) {
 		files[d] = patched
 		cfg, err := loadFiles(files)
 		if err != nil {
-			// checkPatch already type-checked the patch, so this is the
-			// content of a file on disk (a hand edit that no longer parses
-			// or decodes). It is not the request's fault and its message may
-			// quote file contents, so it carries no error kind (HTTP 500).
+			// The patch was shape-checked (checkPatch) and its map keys
+			// restricted to ones viper reads back (lowerMapKeys), so a
+			// failure here is expected to come from a file on disk (a hand
+			// edit that no longer parses or decodes). That is not the
+			// request's fault, so it carries no error kind (HTTP 500). If a
+			// patch-caused case is found, reject it in checkPatch or
+			// lowerMapKeys rather than tagging this error.
 			return err
 		}
 		if err := d.validate(cfg); err != nil {
@@ -239,6 +243,9 @@ func (s *Service) Patch(d Domain, body []byte) (View, error) {
 // lowerMapKeys lowercases the keys of map-typed values (colors) in patch,
 // because viper lowercases map keys on load: writing "Meeting" would read
 // back as "meeting", and a later null-delete of "meeting" would not find it.
+// It also rejects keys viper cannot read back: "" and any key containing "."
+// (viper treats "." as a path separator, so "a.b" would load as a nested map
+// and fail to decode).
 func lowerMapKeys(d Domain, patch map[string]any) error {
 	for _, dk := range domainKeys[d] {
 		if dk.typ.Kind() != reflect.Map {
@@ -249,7 +256,11 @@ func lowerMapKeys(d Domain, patch map[string]any) error {
 			continue
 		}
 		lowered := make(map[string]any, len(m))
-		for k, v := range m {
+		for _, k := range sortedKeys(m) {
+			v := m[k]
+			if k == "" || strings.Contains(k, ".") {
+				return badRequestf("%s: key %q is not allowed (keys must be non-empty and must not contain \".\")", dk.name, k)
+			}
 			lk := strings.ToLower(k)
 			if _, dup := lowered[lk]; dup {
 				return badRequestf("%s: keys %q collide (keys are case-insensitive)", dk.name, lk)
@@ -384,6 +395,32 @@ func destinationsView(list []DestinationConfig) (map[string]any, []string, error
 	}
 	return values, order, nil
 }
+
+// redactDecodeError rewrites a config decode error to name only the fields
+// that failed. mapstructure messages quote the offending value ("..., value:
+// '<v>'", "cannot parse 'f' as int: ... \"<v>\""), and that value can be a
+// secret (an inline ics_url or password), while these errors end up in the
+// startup output and the server log.
+func redactDecodeError(err error) error {
+	var me *mapstructure.Error
+	items := []string{err.Error()}
+	if errors.As(err, &me) {
+		items = me.Errors
+	}
+	fields := make([]string, 0, len(items))
+	for _, it := range items {
+		if m := quotedField.FindStringSubmatch(it); m != nil {
+			fields = append(fields, m[1])
+		} else {
+			fields = append(fields, "?")
+		}
+	}
+	return fmt.Errorf("invalid value or type for %s (value not shown)", strings.Join(fields, ", "))
+}
+
+// quotedField matches the first single-quoted token of a mapstructure error
+// item, which is the field path.
+var quotedField = regexp.MustCompile(`'([^']*)'`)
 
 func badRequestf(format string, a ...any) error {
 	return fmt.Errorf("%w: %s", ErrBadRequest, fmt.Sprintf(format, a...))

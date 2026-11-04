@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/Kenttleton/focacal/internal/auth/simple"
@@ -50,6 +51,13 @@ sources:
 // three domain files, with a config Service and the auth middleware applied.
 func newConfigTestServer(t *testing.T) (*Server, string) {
 	t.Helper()
+	return newConfigTestServerLog(t, io.Discard)
+}
+
+// newConfigTestServerLog is newConfigTestServer with the server log written
+// to logOut.
+func newConfigTestServerLog(t *testing.T, logOut io.Writer) (*Server, string) {
+	t.Helper()
 	t.Cleanup(simple.RevokeAll)
 	dir := t.TempDir()
 	for name, body := range map[string]string{
@@ -69,7 +77,7 @@ func newConfigTestServer(t *testing.T) (*Server, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	log := slog.New(slog.NewTextHandler(logOut, nil))
 	s := New(nil, NewHealthState(), "127.0.0.1:0", log)
 	s.SetConfigDir(dir)
 	s.SetConfigService(svc)
@@ -418,7 +426,8 @@ func TestConfigFileErrorReturns500WithoutContents(t *testing.T) {
 		"decode": "sources:\n  - id: feed\n    type: ics\n    ics_url: [https://x/LEAKME.ics]\n",
 	} {
 		t.Run(name, func(t *testing.T) {
-			s, dir := newConfigTestServer(t)
+			var logBuf syncBuffer
+			s, dir := newConfigTestServerLog(t, &logBuf)
 			if err := os.WriteFile(filepath.Join(dir, "calendars.yaml"), []byte(broken), 0o600); err != nil {
 				t.Fatal(err)
 			}
@@ -446,6 +455,13 @@ func TestConfigFileErrorReturns500WithoutContents(t *testing.T) {
 			}
 			if after := readFile(t, filepath.Join(dir, "planner.yaml")); after != before {
 				t.Errorf("planner.yaml changed")
+			}
+			logged := logBuf.String()
+			if !strings.Contains(logged, "config domain request failed") {
+				t.Errorf("failure not logged:\n%s", logged)
+			}
+			if strings.Contains(logged, "LEAKME") {
+				t.Errorf("server log quotes the secret:\n%s", logged)
 			}
 		})
 	}
@@ -525,5 +541,76 @@ func TestPatchAcceptsMergePatchContentType(t *testing.T) {
 	}
 	if f := decodeView(t, rec).Values["focus"].(map[string]any); f["style"] != "pomodoro" {
 		t.Errorf("focus = %v", f)
+	}
+}
+
+// syncBuffer is a bytes.Buffer safe for the logger and the test to share.
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.b.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.b.String()
+}
+
+func TestPatchDotMapKeyReturns400(t *testing.T) {
+	s, dir := newConfigTestServer(t)
+	before := readFile(t, filepath.Join(dir, "planner.yaml"))
+	rec := doReq(t, s, http.MethodPatch, "/config/planner", []byte(`{"colors":{"a.b":"#ffffff"}}`))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("PATCH = %d %s, want 400", rec.Code, rec.Body)
+	}
+	errorBody(t, rec)
+	if after := readFile(t, filepath.Join(dir, "planner.yaml")); after != before {
+		t.Errorf("planner.yaml changed")
+	}
+}
+
+func TestPatchChunkedOverLimitReturns413(t *testing.T) {
+	s, dir := newConfigTestServer(t)
+	before := readFile(t, filepath.Join(dir, "planner.yaml"))
+	body := `{"colors":{"focus":"` + strings.Repeat("a", 1<<20) + `"}}`
+	// An io.Reader that is not a *bytes.Reader/*strings.Reader leaves
+	// ContentLength unknown (-1), as with Transfer-Encoding: chunked.
+	req := httptest.NewRequest(http.MethodPatch, "/config/planner", io.MultiReader(strings.NewReader(body)))
+	req.ContentLength = -1
+	req.Header.Set("Authorization", "Bearer "+testKey)
+	rec := httptest.NewRecorder()
+	s.srv.Handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("PATCH = %d, want 413", rec.Code)
+	}
+	errorBody(t, rec)
+	if after := readFile(t, filepath.Join(dir, "planner.yaml")); after != before {
+		t.Errorf("planner.yaml changed")
+	}
+}
+
+func TestOpenAPIDocuments503(t *testing.T) {
+	var spec struct {
+		Paths map[string]map[string]json.RawMessage `json:"paths"`
+	}
+	if err := json.Unmarshal(openapiJSON, &spec); err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range []string{"get", "patch"} {
+		var op struct {
+			Responses map[string]json.RawMessage `json:"responses"`
+		}
+		if err := json.Unmarshal(spec.Paths["/config/{domain}"][m], &op); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := op.Responses["503"]; !ok {
+			t.Errorf("%s /config/{domain} lacks response 503", m)
+		}
 	}
 }

@@ -716,3 +716,82 @@ func TestPatchColorKeysLowercased(t *testing.T) {
 		t.Errorf("colliding keys: err = %v, want ErrBadRequest", err)
 	}
 }
+
+// TestPatchRejectsUnloadableMapKeys: viper splits map keys on "." (and an
+// empty key cannot be read back), so such a colors key would pass the shape
+// check and then fail to load. It must be a 400-class error with the files
+// untouched, not an untyped (500) load error.
+func TestPatchRejectsUnloadableMapKeys(t *testing.T) {
+	for name, body := range map[string]string{
+		"dot":         `{"colors":{"a.b":"#ffffff"}}`,
+		"leading dot": `{"colors":{".a":"#ffffff"}}`,
+		"empty":       `{"colors":{"":"#ffffff"}}`,
+		"dot null":    `{"colors":{"a.b":null}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := writeTestDir(t)
+			svc, _ := newTestService(t, dir)
+			before := snapshotFiles(t, dir)
+			_, err := svc.Patch(DomainPlanner, []byte(body))
+			if !errors.Is(err, ErrBadRequest) {
+				t.Fatalf("err = %v, want ErrBadRequest", err)
+			}
+			assertFilesUnchanged(t, dir, before)
+		})
+	}
+}
+
+// TestLegacyDisplayTimezoneIgnored: display_timezone was removed (R1). Old
+// files that still hold it load, and a PATCH leaves the key in place.
+func TestLegacyDisplayTimezoneIgnored(t *testing.T) {
+	dir := writeTestDir(t)
+	for _, f := range []string{"planner.yaml", "config.yaml"} {
+		p := filepath.Join(dir, f)
+		b, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, append(b, []byte("display_timezone: Europe/Paris\n")...), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	svc, _ := newTestService(t, dir)
+	v, err := svc.Get(DomainPlanner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := v.Values["display_timezone"]; ok {
+		t.Error("view exposes display_timezone")
+	}
+	if _, err := svc.Patch(DomainPlanner, []byte(`{"working_hours":{"start":"08:00"}}`)); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(filepath.Join(dir, "planner.yaml"))
+	if !strings.Contains(string(b), "display_timezone: Europe/Paris") {
+		t.Errorf("PATCH dropped the unknown display_timezone key:\n%s", b)
+	}
+	if _, err := svc.Patch(DomainPlanner, []byte(`{"display_timezone":"UTC"}`)); !errors.Is(err, ErrBadRequest) {
+		t.Errorf("patching display_timezone: err = %v, want ErrBadRequest", err)
+	}
+}
+
+// TestDecodeErrorHidesValue: a hand-edited file whose value does not decode
+// must yield an error naming the field without quoting the (possibly
+// secret) value, since it reaches startup output and the server log.
+func TestDecodeErrorHidesValue(t *testing.T) {
+	dir := t.TempDir()
+	bad := "sources:\n  - id: feed\n    type: ics\n    ics_url: [https://x/LEAKME.ics]\n"
+	if err := os.WriteFile(filepath.Join(dir, "calendars.yaml"), []byte(bad), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadDir(dir)
+	if err == nil {
+		t.Fatal("LoadDir succeeded on an undecodable file")
+	}
+	if strings.Contains(err.Error(), "LEAKME") {
+		t.Errorf("error quotes the value: %v", err)
+	}
+	if !strings.Contains(err.Error(), "ics_url") {
+		t.Errorf("error should name the field: %v", err)
+	}
+}

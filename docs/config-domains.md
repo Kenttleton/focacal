@@ -55,7 +55,8 @@ the API (`GET /openapi.json` has the full schema):
   Errors are `{"error": "..."}`: 400 malformed body or unknown key, 404 unknown
   domain, 413 body over 1 MiB, 422 a value fails validation or a secret was
   sent inline (nothing is written), 500 a file on disk could not be read or
-  parsed (details in the server log).
+  parsed (details in the server log), 503 the server has no config service.
+  `colors` keys must be non-empty and must not contain `.`.
 
 ### Secrets
 

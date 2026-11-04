@@ -64,8 +64,9 @@ func (s *Server) handlePatchConfigDomain(w http.ResponseWriter, r *http.Request)
 // writeConfigError maps Service errors to status codes. Bad-request and
 // validation messages are built from field paths, keys and non-secret values
 // by the Service and are returned as is. Anything else comes from reading or
-// parsing the files on disk and may quote their contents, so it is logged
-// and replaced with a generic message.
+// parsing the files on disk: it is logged (config redacts decoded values from
+// such errors) and the client gets a generic message without paths or
+// contents.
 func (s *Server) writeConfigError(w http.ResponseWriter, r *http.Request, d config.Domain, err error) {
 	switch {
 	case errors.Is(err, config.ErrUnknownDomain):
