@@ -50,6 +50,9 @@ func Middleware(enabled func() bool, apiKey func() string, credentialsPresent fu
 		genMu  sync.Mutex
 		genKey string
 	)
+	// The generated key is intentionally not rotated: it is accepted only
+	// while api_key is empty and no credentials exist, so it works again if
+	// credentials are removed later. It is logged once, at generation.
 	// sessionKey returns the generated session key, creating and logging it on
 	// first use.
 	sessionKey := func() string {
@@ -68,7 +71,11 @@ func Middleware(enabled func() bool, apiKey func() string, credentialsPresent fu
 
 	// Startup: keep today's behaviour of printing the key right away.
 	func() {
-		defer func() { _ = recover() }()
+		defer func() {
+			if rec := recover(); rec != nil {
+				log.Error("auth: startup hook panicked", "panic", fmt.Sprint(rec))
+			}
+		}()
 		if enabled() && apiKey() == "" && !credentialsPresent() {
 			sessionKey()
 		}
@@ -86,14 +93,16 @@ func Middleware(enabled func() bool, apiKey func() string, credentialsPresent fu
 				if !enabled() {
 					return true, true
 				}
-				// Allow setup/login endpoints without auth.
-				if r.URL.Path == "/auth/setup" || r.URL.Path == "/auth/login" || r.URL.Path == "/auth/recover" {
-					return true, true
-				}
+				// All hooks are evaluated before any pass-through so a failing
+				// hook denies every path, setup included.
 				staticKey := apiKey()
 				session := ""
 				if staticKey == "" && !credentialsPresent() {
 					session = sessionKey() // generated (and logged) on first need
+				}
+				// Allow setup/login endpoints without auth.
+				if r.URL.Path == "/auth/setup" || r.URL.Path == "/auth/login" || r.URL.Path == "/auth/recover" {
+					return true, true
 				}
 				candidate := extractKey(r)
 				if candidate == "" {

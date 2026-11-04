@@ -138,13 +138,23 @@ func TestEnableFlipNeverLetsUnauthenticatedThrough(t *testing.T) {
 func TestMiddlewareFailsClosedOnPanic(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil))
 	boom := func() bool { panic("boom") }
-	for name, h := range map[string]http.Handler{
-		"enabled":     Middleware(boom, constStr("k"), func() bool { return true }, log)(okHandler),
-		"credentials": Middleware(func() bool { return true }, constStr(""), boom, log)(okHandler),
-		"apikey":      Middleware(func() bool { return true }, func() string { panic("boom") }, func() bool { return true }, log)(okHandler),
-	} {
-		if code := get(h, "k"); code == http.StatusOK {
-			t.Errorf("%s panic: request passed (%d)", name, code)
+	yes := func() bool { return true }
+	cases := map[string]func(http.Handler) http.Handler{
+		"enabled":     Middleware(boom, constStr("k"), yes, log),
+		"credentials": Middleware(yes, constStr(""), boom, log),
+		"apikey":      Middleware(yes, func() string { panic("boom") }, yes, log),
+	}
+	for name, mw := range cases {
+		for _, path := range []string{"/today", "/auth/setup"} {
+			called := false
+			h := mw(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true }))
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			req.Header.Set("Authorization", "Bearer k")
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+			if rec.Code != http.StatusUnauthorized || called {
+				t.Errorf("%s panic on %s: code=%d next called=%v, want 401 and not called", name, path, rec.Code, called)
+			}
 		}
 	}
 }

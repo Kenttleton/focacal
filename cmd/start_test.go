@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -474,5 +475,44 @@ func TestPlainRemovePurgesEventsAndSyncState(t *testing.T) {
 	}
 	if tok, _ := db.GetOAuthToken(ctx, "a"); tok == "" {
 		t.Fatal("oauth token was deleted")
+	}
+}
+
+// A reload that changes planner values publishes a replan request; one that
+// changes nothing the planner reads does not.
+func TestPlannerReloadPublishesReplanRequest(t *testing.T) {
+	dir := t.TempDir()
+	write := func(end string) {
+		for name, body := range map[string]string{
+			"config.yaml":    "server:\n  mcp_port: 5234\n",
+			"planner.yaml":   "working_hours:\n  start: \"09:00\"\n  end: \"" + end + "\"\n  timezone: \"UTC\"\n",
+			"calendars.yaml": "sources: []\n",
+		} {
+			if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	write("17:00")
+	live, err := config.NewLive(dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := bus.New(time.Millisecond)
+	got := make(chan bus.Message, 4)
+	b.Subscribe(func(m bus.Message) { got <- m })
+	live.OnChange(func(old, cur *config.Config) { requestReplanIfPlannerChanged(b, old, cur) })
+
+	write("18:00")
+	if changed, err := live.Reload(); err != nil || !changed {
+		t.Fatalf("Reload = %v, %v", changed, err)
+	}
+	select {
+	case m := <-got:
+		if m.Type != bus.EventReplanRequested {
+			t.Fatalf("published %v, want replan request", m.Type)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("planner reload did not publish a replan request")
 	}
 }

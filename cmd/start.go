@@ -95,7 +95,9 @@ func runStart(_ *cobra.Command, _ []string) error {
 	restSrv.SetRecoveryKeyPath(recoveryPath)
 	mcpSrv := mcp.New(mcpAddr, log)
 
-	// Apply OSS auth middleware to all servers (no-op when auth.enabled = false).
+	// Apply OSS auth middleware to all servers. auth.enabled and api_key are
+	// checked per request against live config, so flipping them applies
+	// without a restart.
 	credentialsPresent := func() bool {
 		_, ok, err := config.LoadCredentials(configDir)
 		return ok || err != nil // an unreadable file still means credentials were set up
@@ -190,9 +192,7 @@ func runStart(_ *cobra.Command, _ []string) error {
 				syncOnly(ctx, log, reg, added, b)
 			}()
 		}
-		if plannerInputsChanged(old, cur) {
-			b.Publish(bus.Message{Type: bus.EventReplanRequested, RequestID: newRequestID()})
-		}
+		requestReplanIfPlannerChanged(b, old, cur)
 	})
 
 	// Registered before the watcher and the servers start so no reload is missed.
@@ -492,6 +492,15 @@ func purgeSource(db *store.DB) func(context.Context, string) (int, error) {
 		}
 		_, err = db.DeleteSyncStateBySource(ctx, id)
 		return n, err
+	}
+}
+
+// requestReplanIfPlannerChanged publishes a replan request when planner or
+// source values changed. This is what supersedes an in-flight replan that
+// straddled the reload (see Agent.Replan).
+func requestReplanIfPlannerChanged(b *bus.Bus, old, cur *config.Config) {
+	if plannerInputsChanged(old, cur) {
+		b.Publish(bus.Message{Type: bus.EventReplanRequested, RequestID: newRequestID()})
 	}
 }
 

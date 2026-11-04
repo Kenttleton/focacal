@@ -395,6 +395,8 @@ func (s *Server) toolListBlocks(ctx context.Context, args json.RawMessage) (*too
 }
 
 func (s *Server) toolGetPreferences(ctx context.Context) (*toolResult, error) {
+	// Reads config per tool request; a mid-replan reload is superseded by the
+	// replan request it publishes (see Agent.Replan).
 	uc := config.UserConfigFromContext(ctx)
 	prefs := map[string]any{
 		"working_hours": map[string]any{
@@ -436,6 +438,8 @@ type Gap struct {
 }
 
 func computeGaps(ctx context.Context, date time.Time) ([]Gap, error) {
+	// Reads config per tool request; a mid-replan reload is superseded by the
+	// replan request it publishes (see Agent.Replan).
 	uc := config.UserConfigFromContext(ctx)
 	db := store.FromContext(ctx)
 
@@ -650,6 +654,11 @@ func (a *Agent) Replan(ctx context.Context, log *slog.Logger) error {
 		log = a.log
 	}
 
+	// Config consistency: tool calls made during this replan read config per
+	// MCP request (see toolGetPreferences, computeGaps), so a reload DURING a
+	// replan can mix this snapshot with later tool-call config. Accepted: every
+	// reload that changes planner or source values publishes a replan request
+	// (cmd: requestReplanIfPlannerChanged), which supersedes the mixed run.
 	snap := a.live.Current() // one snapshot for the whole replan
 	cfg := snap.Agent
 	apiURL := strings.TrimRight(cfg.BaseURL, "/") + "/chat/completions"
