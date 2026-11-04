@@ -7,6 +7,9 @@ import (
 	"slices"
 	"sync"
 	"sync/atomic"
+	"time"
+
+	"github.com/fsnotify/fsnotify"
 )
 
 // snapshot is one immutable load: file is the env-free file config (used for
@@ -33,6 +36,12 @@ type Live struct {
 
 	subMu sync.Mutex
 	subs  []func(old, cur *Config)
+
+	// Watch tuning; zero values select the defaults. Tests set these.
+	debounce   time.Duration
+	pollEvery  time.Duration
+	newWatcher func() (*fsnotify.Watcher, error) // nil: fsnotify.NewWatcher
+	reloadHook func()                            // called after each reload Watch runs
 }
 
 // NewLive performs the first load of dir. It fails on any error: only

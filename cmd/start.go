@@ -169,6 +169,8 @@ func runStart(_ *cobra.Command, _ []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	go func() { _ = live.Watch(ctx) }()
+
 	// Inject the single-user store, config, and bus into the root context so that
 	// all HTTP request contexts (via BaseContext) and background goroutines can
 	// retrieve them without holding direct references.
