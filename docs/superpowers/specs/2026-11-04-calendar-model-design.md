@@ -67,7 +67,7 @@ calendars:
 destinations:
   - id: focus-to-work             # replaces the old writeback emitter
     name: Focus blocks on Work
-    inputs: [{calendar: focacal}]
+    inputs: [{calendar: focacal, kinds: [focus]}]   # kinds optional, default all
     target: {calendar: work}
   - id: share-freebusy
     name: Free/busy feed
@@ -154,7 +154,21 @@ All changes go through the existing merge-patch config API for the `calendars` d
 - Delete is a `null` entry and cascades as in section 6; the response lists what was pruned.
 - The view still omits secrets and reports `has_secret`. OpenAPI and `docs/config-domains.md` are updated with the change.
 
-## 11. Left to the builder
+## 11. Calls made after the builder check
+
+All of these are **[call]**: the owner has not confirmed them.
+
+- **Write-back code.** `internal/emitter/writeback` is not wired into `cmd/start.go`, and its `writeback` config key is already dropped as obsolete on load. The destination push driver replaces it. The builder may reuse its remote-write code but not its per-block-type config.
+- **Which blocks flow to a target.** An input of the built-in calendar may carry `kinds: [focus, lunch, break]` to limit which planner block types flow. Absent means all kinds. This replaces the old per-block-type enable flags. Titles come from the block, adjusted by that input's `title` rename.
+- **Ledger hashing.** Hash normalized fields: trimmed, whitespace-collapsed title; body reduced to plain text; start and end in UTC. A remote edit that changes any of them is treated as a real edit, ingested once, and the planner replans. That replan rewrites the ledger entry, so the worst case is one extra cycle, never an unbounded loop. The ledger is keyed by destination id and remote event id. Served destinations write nothing remote, so they have no ledger.
+- **Ledger and `written_back`.** The `blocks.written_back` column (a map keyed by old source id) is superseded by the ledger. The migration clears it.
+- **Served default feed.** Content and visibility are the same as today's feed, which already serves every event and block behind the global auth. `inputs: all` with full visibility is that behavior, not a change. Until the auth spec ships, routing and the `auth` field are accepted, today's middleware stays in force, and validation rejects `auth: public` so a public feed cannot be configured before it can be enforced.
+- **Migration and blocks.** Dropping stored events is safe because every source re-fetches on sync, and `ics` sources refetch the whole feed. `blocks.source_event_id` references an old event key; the migration sets it to null, since the planner rebuilds displacement on the next replan. Blocks themselves are kept.
+- **Migration write failure.** Mirror `MigrateLegacy`: the migration writes via the atomic writer with a `.bak`, is idempotent, and if the write fails (read-only mount, ConfigMap) the process refuses to start with an error naming the file. Load stays otherwise side-effect free.
+- **Field names.** Calendars use `url` and `url_env`. The old `ics_url` and `ics_url_env` appear only in legacy `sources`, which the migration converts. `has_secret` and masking apply to `url`, `url_env`, `password` and the other secret-bearing fields exactly as they do today.
+- **Validation rules.** A destination whose target is a url-only calendar fails validation. A target with `plan: false` is valid. `inputs: all` expands to every calendar except the destination's own target, plus `focacal`.
+
+## 12. Left to the builder
 
 - Exact code layout, type names and the store migration steps.
 - How the caldav connector maps `remote_id` and what an empty list means.
