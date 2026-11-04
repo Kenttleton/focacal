@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func writeFile(t *testing.T, dir, name, body string) {
@@ -243,4 +244,63 @@ func TestServicePatchReloadsSynchronously(t *testing.T) {
 	if changed, err := l.Reload(); err != nil || changed {
 		t.Errorf("later reload: %v %v", changed, err)
 	}
+}
+
+func TestLiveNotificationsInSwapOrder(t *testing.T) {
+	dir := writeTestDir(t)
+	l := newTestLive(t, dir)
+	var mu sync.Mutex
+	var got [][2]*Config
+	first := true
+	l.OnChange(func(old, cur *Config) {
+		mu.Lock()
+		isFirst := first
+		first = false
+		mu.Unlock()
+		if isFirst {
+			time.Sleep(100 * time.Millisecond)
+		}
+		mu.Lock()
+		got = append(got, [2]*Config{old, cur})
+		mu.Unlock()
+	})
+	start := l.Current()
+	writeFile(t, dir, "planner.yaml", strings.Replace(testPlannerYAML, `"17:00"`, `"18:00"`, 1))
+	done := make(chan struct{})
+	go func() { _, _ = l.Reload(); close(done) }()
+	time.Sleep(30 * time.Millisecond) // first Reload is now inside its subscriber
+	writeFile(t, dir, "planner.yaml", strings.Replace(testPlannerYAML, `"17:00"`, `"19:00"`, 1))
+	if _, err := l.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	<-done
+	if len(got) != 2 || got[0][0] != start || got[1][0] != got[0][1] || got[1][1] != l.Current() {
+		t.Errorf("deliveries out of order: %d", len(got))
+	}
+}
+
+func TestLoadErrorDoesNotEchoValues(t *testing.T) {
+	dir := writeTestDir(t)
+	l := newTestLive(t, dir)
+	svc, _ := NewService(dir, l)
+	writeFile(t, dir, "config.yaml", "server:\n  rest_port: \"sekrit-value\"\n")
+	if _, err := l.Reload(); err == nil {
+		t.Fatal("expected error")
+	}
+	v, err := svc.Get(DomainApp)
+	if err != nil || v.LoadError == "" || strings.Contains(v.LoadError, "sekrit-value") {
+		t.Errorf("Get = %v, load_error %q", err, v.LoadError)
+	}
+}
+
+func TestPatchRefusesWhenFileNoLongerParses(t *testing.T) {
+	dir := writeTestDir(t)
+	l := newTestLive(t, dir)
+	svc, _ := NewService(dir, l)
+	writeFile(t, dir, "planner.yaml", "working_hours: [")
+	before := snapshotFiles(t, dir)
+	if _, err := svc.Patch(DomainPlanner, []byte(`{"working_hours":{"end":"18:00"}}`)); err == nil {
+		t.Fatal("Patch should fail")
+	}
+	assertFilesUnchanged(t, dir, before)
 }

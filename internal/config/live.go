@@ -29,6 +29,7 @@ type Live struct {
 	server  ServerConfig // file-level server block at NewLive
 
 	reloadMu sync.Mutex // serializes Reload
+	notifyMu sync.Mutex // serializes subscriber delivery in swap order
 
 	subMu sync.Mutex
 	subs  []func(old, cur *Config)
@@ -72,7 +73,10 @@ func (l *Live) RestartRequired() bool {
 
 // OnChange registers fn to run after a reload swaps in a different running
 // config, with the old and new values. Subscribers run in registration order
-// on the goroutine that called Reload, without any Live lock held.
+// on the goroutine that called Reload. Deliveries are serialized in swap
+// order, so a subscriber diffing old/new never sees them reordered. A
+// subscriber may call Current but must not call Reload (it would deadlock).
+// Reconciling against Current() rather than trusting cur is always safe.
 func (l *Live) OnChange(fn func(old, cur *Config)) {
 	l.subMu.Lock()
 	defer l.subMu.Unlock()
@@ -97,9 +101,15 @@ func (l *Live) Reload() (changed bool, err error) {
 	l.snap.Store(&snapshot{file: file, running: running})
 	l.lastErr.Store(nil)
 	changed = !reflect.DeepEqual(old.running, running)
+	if changed {
+		// Handoff: take notifyMu before releasing reloadMu so the next
+		// Reload cannot deliver before this one.
+		l.notifyMu.Lock()
+	}
 	l.reloadMu.Unlock()
 
 	if changed {
+		defer l.notifyMu.Unlock()
 		l.subMu.Lock()
 		subs := slices.Clone(l.subs)
 		l.subMu.Unlock()

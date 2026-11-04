@@ -212,6 +212,7 @@ func (s *Service) Patch(d Domain, body []byte) (View, error) {
 	if err != nil {
 		return View{}, err
 	}
+	// The returned view is the saved candidate, not the running config.
 	// Apply the write now so the file watcher finds nothing left to do. A
 	// failure here does not fail the request: the file is already written
 	// and valid for d, so the error means something outside this request
