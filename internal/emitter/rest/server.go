@@ -2,9 +2,11 @@ package rest
 
 import (
 	"context"
+	"crypto/subtle"
 	"database/sql"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -17,7 +19,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
-	"github.com/spf13/viper"
 	"github.com/Kenttleton/focacal/internal/auth/simple"
 	"github.com/Kenttleton/focacal/internal/bus"
 	"github.com/Kenttleton/focacal/internal/conflict"
@@ -64,11 +65,33 @@ type Server struct {
 	addr       string
 	srv        *http.Server
 	log        *slog.Logger
+	// configDir is the config directory: the domain files and
+	// credentials.yaml. Set by SetConfigDir; empty means the working directory.
+	configDir string
+	// configSvc reads and patches the domain files (nil in auth-only tests).
+	configSvc *config.Service
+	// recoveryKeyPath is the file /auth/recover checks the key against.
+	recoveryKeyPath string
 }
+
+// DefaultRecoveryKeyPath is where the recovery key lives in the container.
+const DefaultRecoveryKeyPath = "/data/recovery.key"
+
+// SetConfigDir sets the config directory (domain files and
+// credentials.yaml). cmd/start passes the directory resolved from --config or
+// the search path; there is no implicit default.
+func (s *Server) SetConfigDir(dir string) { s.configDir = dir }
+
+// SetConfigService sets the Service over the config directory, built from the
+// env-free startup snapshot so pending_restart is accurate.
+func (s *Server) SetConfigService(svc *config.Service) { s.configSvc = svc }
+
+// SetRecoveryKeyPath overrides DefaultRecoveryKeyPath (tests use a temp file).
+func (s *Server) SetRecoveryKeyPath(p string) { s.recoveryKeyPath = p }
 
 // New creates a REST API server.
 func New(connectors map[string]connector.Connector, health *HealthState, addr string, log *slog.Logger) *Server {
-	s := &Server{connectors: connectors, health: health, addr: addr, log: log}
+	s := &Server{connectors: connectors, health: health, addr: addr, log: log, recoveryKeyPath: DefaultRecoveryKeyPath}
 
 	r := chi.NewRouter()
 	r.Use(middleware.Recoverer)
@@ -87,18 +110,15 @@ func New(connectors map[string]connector.Connector, health *HealthState, addr st
 	r.Get("/events", s.handleEvents)
 	r.Get("/conflicts", s.handleConflicts)
 	r.Post("/conflicts/{key}/dismiss", s.handleDismissConflict)
-	r.Get("/sources", s.handleSources)
-	r.Get("/destinations", s.handleDestinations)
-	r.Put("/config/sources", s.handlePutSources)
-	r.Put("/config/destinations", s.handlePutDestinations)
 	// Block mutations from the Web UI.
 	r.Post("/blocks", s.handleCreateBlock)
 	r.Patch("/blocks/{id}", s.handleUpdateBlock)
 	r.Delete("/blocks/{id}", s.handleDeleteBlock)
 
-	// Config read/write for the settings panel.
-	r.Get("/config", s.handleGetConfig)
-	r.Patch("/config", s.handleUpdateConfig)
+	// Config: one GET and one PATCH (RFC 7396 merge patch) per domain
+	// (app, planner, calendars). See config_handlers.go.
+	r.Get("/config/{domain}", s.handleGetConfigDomain)
+	r.Patch("/config/{domain}", s.handlePatchConfigDomain)
 
 	// Webcal / ICS feed — next 14 days of events and blocks.
 	// Subscribe in any calendar app with: webcal://host:5233/calendar.ics
@@ -257,143 +277,6 @@ func (s *Server) handleDeleteBlock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
-}
-
-// handleGetConfig returns the subset of config that the settings panel can edit.
-func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
-	uc := config.UserConfigFromContext(r.Context())
-	writeJSON(w, http.StatusOK, map[string]any{
-		"working_hours": map[string]any{
-			"start":    uc.WorkingHours.Start,
-			"end":      uc.WorkingHours.End,
-			"timezone": uc.WorkingHours.Timezone,
-		},
-		"lunch": map[string]any{
-			"preferred":        uc.Lunch.Preferred,
-			"window_start":     uc.Lunch.WindowStart,
-			"window_end":       uc.Lunch.WindowEnd,
-			"duration_minutes": uc.Lunch.DurationMinutes,
-		},
-		"focus": map[string]any{
-			"style":                  uc.Focus.Style,
-			"min_block_minutes":      uc.Focus.MinBlockMinutes,
-			"max_block_minutes":      uc.Focus.MaxBlockMinutes,
-			"buffer_around_meetings": uc.Focus.BufferAroundMeetings,
-		},
-	})
-}
-
-// handleUpdateConfig writes changed settings back to config.yaml via Viper and
-// updates the in-memory config so GET /config reflects the new values immediately.
-func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
-	var u struct {
-		WorkingHours *struct {
-			Start    string `json:"start"`
-			End      string `json:"end"`
-			Timezone string `json:"timezone"`
-		} `json:"working_hours"`
-		Lunch *struct {
-			Preferred       string `json:"preferred"`
-			WindowStart     string `json:"window_start"`
-			WindowEnd       string `json:"window_end"`
-			DurationMinutes int    `json:"duration_minutes"`
-		} `json:"lunch"`
-		Focus *struct {
-			Style                string `json:"style"`
-			MinBlockMinutes      int    `json:"min_block_minutes"`
-			MaxBlockMinutes      int    `json:"max_block_minutes"`
-			BufferAroundMeetings int    `json:"buffer_around_meetings"`
-		} `json:"focus"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&u); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	uc := config.UserConfigFromContext(r.Context())
-
-	if wh := u.WorkingHours; wh != nil {
-		if wh.Start != "" {
-			viper.Set("working_hours.start", wh.Start)
-			uc.WorkingHours.Start = wh.Start
-		}
-		if wh.End != "" {
-			viper.Set("working_hours.end", wh.End)
-			uc.WorkingHours.End = wh.End
-		}
-		if wh.Timezone != "" {
-			viper.Set("working_hours.timezone", wh.Timezone)
-			uc.WorkingHours.Timezone = wh.Timezone
-		}
-	}
-	if l := u.Lunch; l != nil {
-		if l.Preferred != "" {
-			viper.Set("lunch.preferred", l.Preferred)
-			uc.Lunch.Preferred = l.Preferred
-		}
-		if l.WindowStart != "" {
-			viper.Set("lunch.window_start", l.WindowStart)
-			uc.Lunch.WindowStart = l.WindowStart
-		}
-		if l.WindowEnd != "" {
-			viper.Set("lunch.window_end", l.WindowEnd)
-			uc.Lunch.WindowEnd = l.WindowEnd
-		}
-		if l.DurationMinutes > 0 {
-			viper.Set("lunch.duration_minutes", l.DurationMinutes)
-			uc.Lunch.DurationMinutes = l.DurationMinutes
-		}
-	}
-	if f := u.Focus; f != nil {
-		if f.Style != "" {
-			viper.Set("focus.style", f.Style)
-			uc.Focus.Style = f.Style
-		}
-		if f.MinBlockMinutes > 0 {
-			viper.Set("focus.min_block_minutes", f.MinBlockMinutes)
-			uc.Focus.MinBlockMinutes = f.MinBlockMinutes
-		}
-		if f.MaxBlockMinutes > 0 {
-			viper.Set("focus.max_block_minutes", f.MaxBlockMinutes)
-			uc.Focus.MaxBlockMinutes = f.MaxBlockMinutes
-		}
-		if f.BufferAroundMeetings >= 0 {
-			viper.Set("focus.buffer_around_meetings", f.BufferAroundMeetings)
-			uc.Focus.BufferAroundMeetings = f.BufferAroundMeetings
-		}
-	}
-
-	cfgPath := viper.ConfigFileUsed()
-	if cfgPath == "" {
-		writeError(w, http.StatusInternalServerError, "no config file in use")
-		return
-	}
-	// Build a partial config map for WriteSections (only top-level sections owned).
-	sections := map[string]any{
-		"working_hours": map[string]any{
-			"start":    uc.WorkingHours.Start,
-			"end":      uc.WorkingHours.End,
-			"timezone": uc.WorkingHours.Timezone,
-		},
-		"lunch": map[string]any{
-			"preferred":        uc.Lunch.Preferred,
-			"window_start":     uc.Lunch.WindowStart,
-			"window_end":       uc.Lunch.WindowEnd,
-			"duration_minutes": uc.Lunch.DurationMinutes,
-		},
-		"focus": map[string]any{
-			"style":                  uc.Focus.Style,
-			"min_block_minutes":      uc.Focus.MinBlockMinutes,
-			"max_block_minutes":      uc.Focus.MaxBlockMinutes,
-			"buffer_around_meetings": uc.Focus.BufferAroundMeetings,
-		},
-	}
-	if err := config.WriteSections(cfgPath, sections); err != nil {
-		s.log.Warn("write config", "err", err)
-		writeError(w, http.StatusInternalServerError, "could not write config.yaml: "+err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"status": "saved", "restart_required": true})
 }
 
 // handleWebhookValidation responds to the Outlook/Graph subscription validation
@@ -696,104 +579,6 @@ func (s *Server) handleDismissConflict(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *Server) handleSources(w http.ResponseWriter, r *http.Request) {
-	uc := config.UserConfigFromContext(r.Context())
-	out := make([]map[string]any, 0, len(uc.Sources))
-	for _, src := range uc.Sources {
-		out = append(out, map[string]any{
-			"id":           src.ID,
-			"label":        src.Label,
-			"type":         src.Type,
-			"calendar_ids": src.EffectiveCalendarIDs(),
-			"conflicts": map[string]bool{
-				"declined":  src.Conflicts.CountsDeclined(),
-				"tentative": src.Conflicts.CountsTentative(),
-				"free":      src.Conflicts.CountsFree(),
-				"all_day":   src.Conflicts.CountsAllDay(),
-			},
-			"ics_url_env": src.ICSURLEnv,
-			"has_secret":  src.Password != "" || src.ICSURL != "",
-		})
-	}
-	writeJSON(w, http.StatusOK, out)
-}
-
-func (s *Server) handleDestinations(w http.ResponseWriter, r *http.Request) {
-	uc := config.UserConfigFromContext(r.Context())
-	writeJSON(w, http.StatusOK, uc.Destinations)
-}
-
-func (s *Server) handlePutSources(w http.ResponseWriter, r *http.Request) {
-	var list []config.SourceConfig
-	if err := json.NewDecoder(r.Body).Decode(&list); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	uc := config.UserConfigFromContext(r.Context())
-	// sentinel handling
-	for i := range list {
-		if list[i].Password == "********" {
-			// find existing
-			for _, old := range uc.Sources {
-				if old.ID == list[i].ID {
-					list[i].Password = old.Password
-					list[i].ICSURL = old.ICSURL
-				}
-			}
-		}
-		if list[i].ICSURL == "********" {
-			for _, old := range uc.Sources {
-				if old.ID == list[i].ID {
-					list[i].ICSURL = old.ICSURL
-				}
-			}
-		}
-	}
-	candidate := *uc
-	candidate.Sources = list
-	cfg := &config.Config{UserConfig: candidate}
-	if err := cfg.Validate(); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	path := viper.ConfigFileUsed()
-	if path == "" {
-		writeError(w, http.StatusInternalServerError, "no config file in use")
-		return
-	}
-	if err := config.WriteSections(path, map[string]any{"sources": list}); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"status": "saved", "restart_required": true})
-}
-
-func (s *Server) handlePutDestinations(w http.ResponseWriter, r *http.Request) {
-	var list []config.DestinationConfig
-	if err := json.NewDecoder(r.Body).Decode(&list); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	uc := config.UserConfigFromContext(r.Context())
-	candidate := *uc
-	candidate.Destinations = list
-	cfg := &config.Config{UserConfig: candidate}
-	if err := cfg.Validate(); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	path := viper.ConfigFileUsed()
-	if path == "" {
-		writeError(w, http.StatusInternalServerError, "no config file in use")
-		return
-	}
-	if err := config.WriteSections(path, map[string]any{"destinations": list}); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"status": "saved", "restart_required": true})
-}
-
 func parseRange(r *http.Request) (time.Time, time.Time) {
 	now := time.Now()
 	from := now.AddDate(0, 0, -7)
@@ -811,6 +596,9 @@ func parseRange(r *http.Request) (time.Time, time.Time) {
 	return from, to
 }
 
+// Auth handlers read and write only credentials.yaml in s.configDir; they
+// never touch the domain files (config.yaml, planner.yaml, calendars.yaml).
+
 func (s *Server) handleAuthSetup(w http.ResponseWriter, r *http.Request) {
 	var u struct {
 		Username string `json:"username"`
@@ -820,37 +608,33 @@ func (s *Server) handleAuthSetup(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	uc := config.UserConfigFromContext(r.Context())
-	// only allow if no password set yet
-	if uc.Auth.PasswordHash != "" {
+	if u.Username == "" || u.Password == "" {
+		writeError(w, http.StatusBadRequest, "username and password are required")
+		return
+	}
+	if _, ok, err := config.LoadCredentials(s.configDir); err != nil {
+		s.authInternalError(w, r, err)
+		return
+	} else if ok {
 		writeError(w, http.StatusForbidden, "already configured")
 		return
 	}
 	h, err := simple.HashPassword(u.Password)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		s.authInternalError(w, r, err)
 		return
 	}
-	uc.Auth.Username = u.Username
-	uc.Auth.PasswordHash = h
-	// generate session token
-	tok := simple.GenerateKey()
-	th, _ := simple.HashToken(tok)
-	uc.Auth.SessionToken = th
-	// persist
-	path := viper.ConfigFileUsed()
-	if path != "" {
-		config.WriteSections(path, map[string]any{
-			"auth": map[string]any{
-				"enabled":       true,
-				"username":      uc.Auth.Username,
-				"password_hash": uc.Auth.PasswordHash,
-				"session_token": uc.Auth.SessionToken,
-			},
-		})
+	if err := config.SetupCredentials(s.configDir, config.Credentials{Username: u.Username, PasswordHash: h}); err != nil {
+		if errors.Is(err, config.ErrAlreadyConfigured) {
+			writeError(w, http.StatusForbidden, "already configured")
+			return
+		}
+		s.authInternalError(w, r, err)
+		return
 	}
-	simple.StoreToken(tok)
-	writeJSON(w, http.StatusOK, map[string]string{"token": tok})
+	// New credentials: tokens from any earlier (deleted) credentials die.
+	simple.RevokeAll()
+	writeJSON(w, http.StatusOK, map[string]string{"token": issueToken()})
 }
 
 func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
@@ -862,28 +646,48 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	uc := config.UserConfigFromContext(r.Context())
-	if uc.Auth.Username != u.Username || !simple.VerifyPassword(uc.Auth.PasswordHash, u.Password) {
+	// Capture the revocation generation before reading credentials: if a
+	// reset/recover/setup replaces them (and calls RevokeAll) while bcrypt
+	// runs, the token below is refused instead of outliving the old hash.
+	gen := simple.Generation()
+	c, ok, err := config.LoadCredentials(s.configDir)
+	if err != nil {
+		s.authInternalError(w, r, err)
+		return
+	}
+	userOK := ok && subtle.ConstantTimeCompare([]byte(c.Username), []byte(u.Username)) == 1
+	hash := c.PasswordHash
+	if !userOK {
+		hash = dummyHash() // always run bcrypt: no username timing oracle
+	}
+	pwOK := simple.VerifyPassword(hash, u.Password)
+	if !userOK || !pwOK {
 		writeError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
+	loginVerifiedHook()
 	tok := simple.GenerateKey()
-	th, _ := simple.HashToken(tok)
-	uc.Auth.SessionToken = th
-	path := viper.ConfigFileUsed()
-	if path != "" {
-		config.WriteSections(path, map[string]any{
-			"auth": map[string]any{
-				"enabled":       true,
-				"username":      uc.Auth.Username,
-				"password_hash": uc.Auth.PasswordHash,
-				"session_token": uc.Auth.SessionToken,
-			},
-		})
+	if !simple.StoreTokenAt(tok, gen) {
+		writeError(w, http.StatusUnauthorized, "credentials changed; log in again")
+		return
 	}
-	simple.StoreToken(tok)
 	writeJSON(w, http.StatusOK, map[string]string{"token": tok})
 }
+
+// dummyHash is a bcrypt hash of a random secret, verified against when the
+// username is unknown so failed logins cost the same either way.
+var dummyHash = sync.OnceValue(func() string {
+	h, err := simple.HashPassword(simple.GenerateKey())
+	if err != nil {
+		panic("auth: cannot build dummy hash: " + err.Error())
+	}
+	return h
+})
+
+// loginVerifiedHook runs in login after the password is verified and before
+// the token is registered. Test seam for forcing a reset/recover into that
+// window; a no-op in production.
+var loginVerifiedHook = func() {}
 
 func (s *Server) handleAuthReset(w http.ResponseWriter, r *http.Request) {
 	var u struct {
@@ -893,29 +697,31 @@ func (s *Server) handleAuthReset(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	uc := config.UserConfigFromContext(r.Context())
-	h, err := simple.HashPassword(u.NewPassword)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+	if u.NewPassword == "" {
+		writeError(w, http.StatusBadRequest, "new_password is required")
 		return
 	}
-	uc.Auth.PasswordHash = h
-	tok := simple.GenerateKey()
-	th, _ := simple.HashToken(tok)
-	uc.Auth.SessionToken = th
-	path := viper.ConfigFileUsed()
-	if path != "" {
-		config.WriteSections(path, map[string]any{
-			"auth": map[string]any{
-				"enabled":       true,
-				"username":      uc.Auth.Username,
-				"password_hash": uc.Auth.PasswordHash,
-				"session_token": uc.Auth.SessionToken,
-			},
-		})
+	c, ok, err := config.LoadCredentials(s.configDir)
+	if err != nil {
+		s.authInternalError(w, r, err)
+		return
 	}
-	simple.StoreToken(tok)
-	writeJSON(w, http.StatusOK, map[string]string{"token": tok})
+	if !ok {
+		writeError(w, http.StatusConflict, "not configured; use /auth/setup")
+		return
+	}
+	h, err := simple.HashPassword(u.NewPassword)
+	if err != nil {
+		s.authInternalError(w, r, err)
+		return
+	}
+	c.PasswordHash = h
+	if err := config.SaveCredentials(s.configDir, c); err != nil {
+		s.authInternalError(w, r, err)
+		return
+	}
+	simple.RevokeAll()
+	writeJSON(w, http.StatusOK, map[string]string{"token": issueToken()})
 }
 
 func (s *Server) handleAuthRecover(w http.ResponseWriter, r *http.Request) {
@@ -928,39 +734,46 @@ func (s *Server) handleAuthRecover(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	data, err := os.ReadFile("/data/recovery.key")
+	data, err := os.ReadFile(s.recoveryKeyPath)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "no recovery key on server")
 		return
 	}
-	if strings.TrimSpace(string(data)) != u.RecoveryKey {
+	key := strings.TrimSpace(string(data))
+	if key == "" || subtle.ConstantTimeCompare([]byte(key), []byte(u.RecoveryKey)) != 1 {
 		writeError(w, http.StatusUnauthorized, "invalid recovery key")
 		return
 	}
-	uc := config.UserConfigFromContext(r.Context())
-	h, err := simple.HashPassword(u.NewPassword)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+	if u.Username == "" || u.NewPassword == "" {
+		writeError(w, http.StatusBadRequest, "username and new_password are required")
 		return
 	}
-	uc.Auth.Username = u.Username
-	uc.Auth.PasswordHash = h
-	tok := simple.GenerateKey()
-	th, _ := simple.HashToken(tok)
-	uc.Auth.SessionToken = th
-	path := viper.ConfigFileUsed()
-	if path != "" {
-		config.WriteSections(path, map[string]any{
-			"auth": map[string]any{
-				"enabled":       true,
-				"username":      uc.Auth.Username,
-				"password_hash": uc.Auth.PasswordHash,
-				"session_token": uc.Auth.SessionToken,
-			},
-		})
+	h, err := simple.HashPassword(u.NewPassword)
+	if err != nil {
+		s.authInternalError(w, r, err)
+		return
 	}
+	if err := config.SaveCredentials(s.configDir, config.Credentials{Username: u.Username, PasswordHash: h}); err != nil {
+		s.authInternalError(w, r, err)
+		return
+	}
+	simple.RevokeAll()
+	writeJSON(w, http.StatusOK, map[string]string{"token": issueToken()})
+}
+
+// authInternalError logs an auth handler failure (file errors name paths,
+// never passwords or hashes) and returns a generic 500: the client gets no
+// paths or internal error text.
+func (s *Server) authInternalError(w http.ResponseWriter, r *http.Request, err error) {
+	s.log.Error("auth request failed", "path", r.URL.Path, "request_id", middleware.GetReqID(r.Context()), "err", err)
+	writeError(w, http.StatusInternalServerError, "internal error; see the server log")
+}
+
+// issueToken generates and registers a new session token.
+func issueToken() string {
+	tok := simple.GenerateKey()
 	simple.StoreToken(tok)
-	writeJSON(w, http.StatusOK, map[string]string{"token": tok})
+	return tok
 }
 
 func sortDTOs(dtos []EventDTO) {

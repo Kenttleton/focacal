@@ -78,8 +78,8 @@ var plugin = await kernel.ImportPluginFromOpenApiAsync(
 | `updateBlock` | PATCH | `/blocks/{id}` | Extend, rename, or lock a block |
 | `deleteBlock` | DELETE | `/blocks/{id}` | Remove a block |
 | `triggerReplan` | POST | `/replan` | Ask the AI to regenerate the schedule |
-| `getConfig` | GET | `/config` | Read scheduling preferences |
-| `updateConfig` | PATCH | `/config` | Update working hours / focus style |
+| `getConfigDomain` | GET | `/config/{domain}` | Read one config domain (`app`, `planner`, `calendars`) |
+| `patchConfigDomain` | PATCH | `/config/{domain}` | Merge-patch one domain, e.g. working hours or focus style |
 | `getHealth` | GET | `/health` | Service status and sync state |
 | `getCalendarFeed` | GET | `/calendar.ics` | Subscribe via webcal |
 

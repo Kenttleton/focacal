@@ -27,7 +27,7 @@ Examples:
   focacal auth google work-google
   focacal auth outlook personal-outlook
 
-The source-id must match an entry in your config.yaml sources list.
+The source-id must match an entry in the sources list of calendars.yaml.
 On first run this opens your browser for the OAuth2 consent screen.
 The callback is handled on localhost — no internet exposure needed.`,
 	Args: cobra.ExactArgs(2),
@@ -42,9 +42,9 @@ func runAuth(_ *cobra.Command, args []string) error {
 	provider := args[0]
 	sourceID := args[1]
 
-	cfg, err := config.Load()
+	_, _, cfg, err := loadConfig(newLogger())
 	if err != nil {
-		return fmt.Errorf("load config: %w", err)
+		return err
 	}
 
 	// Find the source config entry.
@@ -56,7 +56,7 @@ func runAuth(_ *cobra.Command, args []string) error {
 		}
 	}
 	if srcCfg == nil {
-		return fmt.Errorf("source %q not found in config — add it to sources in config.yaml", sourceID)
+		return fmt.Errorf("source %q not found in config — add it to sources in calendars.yaml", sourceID)
 	}
 
 	db, err := store.Open("/data/focacal.db")

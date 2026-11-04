@@ -39,9 +39,17 @@ func init() {
 func runStart(_ *cobra.Command, _ []string) error {
 	log := newLogger()
 
-	cfg, err := config.Load()
+	// started is env-free: config.NewService compares it with the files on
+	// disk for pending_restart, so env overrides must never be applied to it.
+	// cfg has env overrides applied and is what the process runs with.
+	configDir, started, cfg, err := loadConfig(log)
 	if err != nil {
-		return fmt.Errorf("load config: %w", err)
+		return err
+	}
+	log.Info("config loaded", "dir", configDir)
+	configSvc, err := config.NewService(configDir, started)
+	if err != nil {
+		return fmt.Errorf("config service: %w", err)
 	}
 
 	// Ensure a recovery key exists for hard-reset of forgotten credentials.
@@ -111,10 +119,19 @@ func runStart(_ *cobra.Command, _ []string) error {
 	health := rest.NewHealthState()
 	caldavSrv := caldav.New(caldavAddr, log)
 	restSrv := rest.New(connectors, health, restAddr, log)
+	// The resolved config directory holds the domain files and
+	// credentials.yaml, whichever --config form was used.
+	restSrv.SetConfigDir(configDir)
+	restSrv.SetConfigService(configSvc)
+	restSrv.SetRecoveryKeyPath(recoveryPath)
 	mcpSrv := mcp.New(mcpAddr, log)
 
 	// Apply OSS auth middleware to all servers (no-op when auth.enabled = false).
-	authMW := simple.Middleware(cfg.GlobalConfig.Auth, log)
+	credentialsPresent := func() bool {
+		_, ok, err := config.LoadCredentials(configDir)
+		return ok || err != nil // an unreadable file still means credentials were set up
+	}
+	authMW := simple.Middleware(cfg.GlobalConfig.Auth, credentialsPresent, log)
 	caldavSrv.WrapHandler(authMW)
 	restSrv.WrapHandler(authMW)
 	mcpSrv.WrapHandler(authMW)

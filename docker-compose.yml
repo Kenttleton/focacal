@@ -11,6 +11,15 @@ services:
       - "${MCP_PORT:-5234}:5234"        # MCP server — optional external clients
       - "${OAUTH_PORT:-8080}:8080"      # OAuth2 callback — used only during 'focacal auth'
 
+    # Pass .env into the container (it is optional: without it the defaults
+    # below apply). This is how ics_url_env feeds (FOCACAL_ICS_*), the agent
+    # key (FOCACAL_AGENT_API_KEY) and other FOCACAL_<SECTION>_<KEY>
+    # overrides reach focacal. Entries under environment: take precedence;
+    # they read the same .env values, so the two agree.
+    env_file:
+      - path: .env
+        required: false
+
     environment:
       # Core
       FOCACAL_DEBUG: "${FOCACAL_DEBUG:-false}"
@@ -19,8 +28,9 @@ services:
       # For local use: http://localhost:8080 (the default)
       OAUTH_REDIRECT_BASE_URL: "${OAUTH_REDIRECT_BASE_URL:-http://localhost:8080}"
 
-      # Ollama — override with your Ollama instance URL if running separately.
-      OLLAMA_BASE_URL: "${OLLAMA_BASE_URL:-http://host.docker.internal:11434}"
+      # Scheduler agent endpoint (OpenAI-compatible; note the /v1 suffix).
+      # Overrides agent.base_url in config/config.yaml.
+      FOCACAL_AGENT_BASE_URL: "${FOCACAL_AGENT_BASE_URL:-http://host.docker.internal:11434/v1}"
 
       # Google OAuth credentials (required if you have a google source).
       GOOGLE_CLIENT_ID: "${GOOGLE_CLIENT_ID:-}"
@@ -31,10 +41,13 @@ services:
       OUTLOOK_CLIENT_SECRET: "${OUTLOOK_CLIENT_SECRET:-}"
 
     volumes:
-      # Persistent data: SQLite DB, OAuth tokens, ICS cache.
+      # Persistent data: SQLite DB (rebuildable state only), recovery key.
       - focacal-data:/data
-      # Config file mount — edit on the host, picked up on restart.
-      - ./config.yaml:/data/config.yaml
+      # Config directory: config.yaml, planner.yaml, calendars.yaml and the
+      # local-only credentials.yaml. Writable so the UI can save settings;
+      # edits are picked up on restart. See docs/config-domains.md.
+      # On Linux the directory must be writable by uid 1001 (the container user).
+      - ./config:/data/config
 
     # Allows Ollama running on the host (not in Docker) to be reachable
     # via host.docker.internal on both Mac and Linux.

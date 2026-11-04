@@ -221,46 +221,58 @@
         }
       }
     },
-    "/config": {
+    "/config/{domain}": {
+      "parameters": [
+        {
+          "name": "domain",
+          "in": "path",
+          "required": true,
+          "description": "Config domain. app: server, agent, oauth, auth.enabled (config.yaml). planner: working_hours, lunch, focus, colors (planner.yaml). calendars: sources, destinations (calendars.yaml).",
+          "schema": { "type": "string", "enum": ["app", "planner", "calendars"] }
+        }
+      ],
       "get": {
-        "operationId": "getConfig",
-        "summary": "Get scheduling configuration",
-        "description": "Returns the current working hours, lunch window, and focus scheduling settings.",
+        "operationId": "getConfigDomain",
+        "summary": "Get one config domain",
+        "description": "Returns the saved values of one domain (file contents over defaults; environment overrides are not applied). Secrets (password, ics_url, api_key) are never returned; each source carries has_secret instead.",
         "responses": {
           "200": {
-            "description": "Current configuration",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/Config" }
-              }
-            }
-          }
+            "description": "The domain's saved values",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ConfigView" } } }
+          },
+          "404": { "description": "Unknown config domain", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "500": { "description": "A config file on disk could not be read, parsed or written; details are in the server log", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "503": { "description": "The config service is not available on this server", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
         }
       },
       "patch": {
-        "operationId": "updateConfig",
-        "summary": "Update scheduling configuration",
-        "description": "Patches working hours, lunch window, or focus settings. Changes are written to config.yaml and take effect on the next replan.",
+        "operationId": "patchConfigDomain",
+        "summary": "Update one config domain",
+        "description": "Applies an RFC 7396 JSON merge patch to the domain's file. Send only what changes; null deletes a key or a collection item. Collections (sources, destinations) are objects keyed by item id (destinations: id|calendar_id). The patched domain is validated before anything is written; on any error the file is unchanged. Comments in the file are preserved. Changes take effect after a restart (see pending_restart). Secrets cannot be set through the API; reference them with *_env or *_file fields. The body is limited to 1 MiB.",
         "requestBody": {
           "required": true,
           "content": {
+            "application/merge-patch+json": {
+              "schema": { "type": "object", "additionalProperties": true },
+              "example": { "working_hours": { "start": "08:30" } }
+            },
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/Config" }
+              "schema": { "type": "object", "additionalProperties": true },
+              "example": { "sources": { "work": { "label": "Work" }, "old-feed": null } }
             }
           }
         },
         "responses": {
           "200": {
-            "description": "Saved",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": { "status": { "type": "string", "example": "saved" } }
-                }
-              }
-            }
-          }
+            "description": "Saved; the domain's new values",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ConfigView" } } }
+          },
+          "400": { "description": "Malformed body: not JSON, not a JSON object, an unknown key, or a value of the wrong type", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "404": { "description": "Unknown config domain", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "413": { "description": "Body larger than 1 MiB", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "422": { "description": "Validation failed (a bad value, a required value set to null, or an inline secret); nothing was written", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "500": { "description": "A config file on disk could not be read, parsed or written; details are in the server log", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "503": { "description": "The config service is not available on this server", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
         }
       }
     },
@@ -333,36 +345,32 @@
           "locked": { "type": "boolean" }
         }
       },
-      "Config": {
+      "ConfigView": {
         "type": "object",
+        "required": ["values", "order", "pending_restart"],
         "properties": {
-          "working_hours": {
+          "values": {
             "type": "object",
-            "properties": {
-              "start":    { "type": "string", "example": "09:00" },
-              "end":      { "type": "string", "example": "18:00" },
-              "timezone": { "type": "string", "example": "America/New_York" }
-            }
+            "additionalProperties": true,
+            "description": "Saved values keyed by top-level key (e.g. working_hours, focus). Collections are objects keyed by item id; secrets are omitted and each source carries has_secret.",
+            "example": { "working_hours": { "start": "09:00", "end": "17:00", "timezone": "America/New_York" } }
           },
-          "lunch": {
+          "order": {
             "type": "object",
-            "properties": {
-              "preferred":        { "type": "string", "example": "12:00" },
-              "window_start":     { "type": "string", "example": "11:30" },
-              "window_end":       { "type": "string", "example": "13:30" },
-              "duration_minutes": { "type": "integer", "example": 60 }
-            }
+            "additionalProperties": { "type": "array", "items": { "type": "string" } },
+            "description": "Each collection's ids in file order, since JSON objects are unordered. Empty for domains without collections.",
+            "example": { "sources": ["work", "feed"] }
           },
-          "focus": {
-            "type": "object",
-            "properties": {
-              "style":                  { "type": "string", "enum": ["flexible", "pomodoro", "fixed"] },
-              "min_block_minutes":      { "type": "integer", "example": 30 },
-              "max_block_minutes":      { "type": "integer", "example": 120 },
-              "buffer_around_meetings": { "type": "integer", "example": 10 }
-            }
+          "pending_restart": {
+            "type": "boolean",
+            "description": "True when this domain's saved values differ from the ones the running process started with."
           }
         }
+      },
+      "Error": {
+        "type": "object",
+        "required": ["error"],
+        "properties": { "error": { "type": "string" } }
       },
       "Health": {
         "type": "object",

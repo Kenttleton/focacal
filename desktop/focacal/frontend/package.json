@@ -11,10 +11,13 @@
   "dependencies": {
     "@fullcalendar/daygrid": "^6.1.22",
     "@fullcalendar/interaction": "^6.1.22",
+    "@fullcalendar/luxon3": "^6.1.22",
     "@fullcalendar/react": "^6.1.22",
     "@fullcalendar/timegrid": "^6.1.22",
     "@mantine/core": "^9.7.4",
     "@mantine/hooks": "^9.7.4",
+    "@tabler/icons-react": "^3.50.0",
+    "luxon": "^3.7.2",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },

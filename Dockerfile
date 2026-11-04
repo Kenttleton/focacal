@@ -20,7 +20,10 @@ RUN addgroup -g 1001 focacal && adduser -u 1001 -G focacal -s /bin/sh -D focacal
 
 COPY --from=builder /focacal /usr/local/bin/focacal
 
-# /data holds the SQLite DB, config.yaml, and OAuth token cache.
+# /data holds the SQLite DB and recovery key; /data/config is the config
+# directory (bind-mounted from ./config by docker-compose.yml, else created on
+# first start). It is deliberately not created here, so an old single-file
+# mount at /data/config.yaml is still detected on upgrade.
 RUN mkdir -p /data && chown focacal:focacal /data
 
 USER focacal

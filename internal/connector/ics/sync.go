@@ -18,7 +18,8 @@ import (
 func (c *Connector) Sync(ctx context.Context) error {
 	feedURL, err := c.cfg.ResolveICSURL()
 	if err != nil {
-		return err
+		// Names the variable, never a URL (R14: per-source, at sync time).
+		return fmt.Errorf("ics[%s]: %w", c.cfg.ID, err)
 	}
 
 	now := time.Now()
@@ -27,7 +28,8 @@ func (c *Connector) Sync(ctx context.Context) error {
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, feedURL, nil)
 	if err != nil {
-		return fmt.Errorf("ics[%s]: fetch failed: %w", c.cfg.ID, err)
+		// The parse error quotes the URL, which is a secret.
+		return fmt.Errorf("ics[%s]: feed URL is not a valid URL", c.cfg.ID)
 	}
 	if c.etag != "" {
 		req.Header.Set("If-None-Match", c.etag)

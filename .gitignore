@@ -36,3 +36,18 @@ raycast-extension/dist/
 
 # Docker
 docker-compose.override.yml
+
+# Local agent scratch and worktrees
+.claude/worktrees/
+.superpowers/
+.playwright-mcp/
+
+# Local-only login credentials (internal/config/credentials.go)
+credentials.yaml
+# Writer / migration backups (config.yaml.bak may hold a password hash)
+*.yaml.bak
+# OAuth client secret files referenced by credentials_file, and token files
+
+# Live config directory: created on first start from config.example/.
+# Holds the login, backups and OAuth files; port it, never commit it.
+/config/

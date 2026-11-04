@@ -8,20 +8,27 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/Kenttleton/focacal/internal/config"
 )
 
-// Middleware returns an HTTP middleware enforcing auth.
-func Middleware(cfg config.AuthConfig, log *slog.Logger) func(http.Handler) http.Handler {
+// Middleware returns an HTTP middleware enforcing auth. credentialsPresent
+// reports whether login credentials (credentials.yaml) exist. It is called
+// once, here at construction (startup): when neither credentials nor
+// auth.api_key are set, a one-off session key is generated and logged. A nil
+// hook means no credentials. It is not consulted per request: /auth/setup,
+// /auth/login and /auth/recover always pass through, and the setup handler
+// itself refuses (per request) once credentials.yaml exists.
+func Middleware(cfg config.AuthConfig, credentialsPresent func() bool, log *slog.Logger) func(http.Handler) http.Handler {
 	if !cfg.Enabled {
 		return func(next http.Handler) http.Handler { return next }
 	}
 
 	key := cfg.APIKey
-	if key == "" && cfg.PasswordHash == "" {
+	if key == "" && (credentialsPresent == nil || !credentialsPresent()) {
 		key = GenerateKey()
 		log.Info("OSS auth: no credentials configured — generated a session key",
 			"api_key", key,
@@ -93,9 +100,13 @@ func generateKeyImpl() string {
 	return hex.EncodeToString(b)
 }
 
-// HashPassword hashes a password with bcrypt.
+// BcryptCost is the bcrypt cost HashPassword uses. It stays
+// bcrypt.DefaultCost in production; tests may lower it (TestMain) for speed.
+var BcryptCost = bcrypt.DefaultCost
+
+// HashPassword hashes a password with bcrypt at BcryptCost.
 func HashPassword(pw string) (string, error) {
-	h, err := bcrypt.GenerateFromPassword([]byte(pw), bcrypt.DefaultCost)
+	h, err := bcrypt.GenerateFromPassword([]byte(pw), BcryptCost)
 	return string(h), err
 }
 
@@ -104,17 +115,55 @@ func VerifyPassword(hash, pw string) bool {
 	return bcrypt.CompareHashAndPassword([]byte(hash), []byte(pw)) == nil
 }
 
-// in-memory token registry (survives for process lifetime)
-var validTokens = make(map[string]bool)
+// In-memory token registry (survives for process lifetime). Guarded by
+// tokensMu: handlers and middleware run on concurrent goroutines. generation
+// counts RevokeAll calls so a token minted against credentials that were
+// replaced meanwhile can be refused (see StoreTokenAt).
+var (
+	tokensMu    sync.RWMutex
+	validTokens = make(map[string]bool)
+	generation  uint64
+)
 
-// StoreToken registers a newly issued token.
-func StoreToken(tok string) { validTokens[tok] = true }
+// StoreToken registers a newly issued token unconditionally.
+func StoreToken(tok string) {
+	tokensMu.Lock()
+	validTokens[tok] = true
+	tokensMu.Unlock()
+}
 
-// IsValidToken reports whether tok was issued this process.
-func IsValidToken(tok string) bool { return validTokens[tok] }
+// Generation returns the current revocation generation. Capture it before
+// reading the credentials a token will be issued against.
+func Generation() uint64 {
+	tokensMu.RLock()
+	defer tokensMu.RUnlock()
+	return generation
+}
 
-// HashToken hashes a session token with bcrypt.
-func HashToken(tok string) (string, error) {
-	h, err := bcrypt.GenerateFromPassword([]byte(tok), bcrypt.DefaultCost)
-	return string(h), err
+// StoreTokenAt registers tok only if no RevokeAll happened since gen was
+// read; it reports whether the token was stored.
+func StoreTokenAt(tok string, gen uint64) bool {
+	tokensMu.Lock()
+	defer tokensMu.Unlock()
+	if gen != generation {
+		return false
+	}
+	validTokens[tok] = true
+	return true
+}
+
+// IsValidToken reports whether tok was issued this process and not revoked.
+func IsValidToken(tok string) bool {
+	tokensMu.RLock()
+	defer tokensMu.RUnlock()
+	return validTokens[tok]
+}
+
+// RevokeAll invalidates every issued token and advances the generation
+// (used when credentials change: setup, reset, recover).
+func RevokeAll() {
+	tokensMu.Lock()
+	clear(validTokens)
+	generation++
+	tokensMu.Unlock()
 }
