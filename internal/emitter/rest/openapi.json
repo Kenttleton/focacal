@@ -248,7 +248,7 @@
       "patch": {
         "operationId": "patchConfigDomain",
         "summary": "Update one config domain",
-        "description": "Applies an RFC 7396 JSON merge patch to the domain's file. Send only what changes; null deletes a key or a collection item. Collections (sources, destinations) are objects keyed by item id (destinations: id|calendar_id). The patched domain is validated before anything is written; on any error the file is unchanged. Comments in the file are preserved. Changes take effect after a restart (see pending_restart). Secrets cannot be set through the API; reference them with *_env or *_file fields. The body is limited to 1 MiB.",
+        "description": "Applies an RFC 7396 JSON merge patch to the domain's file. Send only what changes; null deletes a key or a collection item. Collections (sources, destinations) are objects keyed by item id (destinations: id|calendar_id). The patched domain is validated before anything is written; on any error the file is unchanged. Changes apply live within about a second, except the server block (ports, bind address, webhooks), which needs a restart (see pending_restart). The file is rewritten on save: comments and unknown keys are not preserved. If a hand edit later fails to load, the previous config keeps running and GET reports load_error. Secrets cannot be set through the API; reference them with *_env or *_file fields. The body is limited to 1 MiB.",
         "requestBody": {
           "required": true,
           "content": {
@@ -347,7 +347,7 @@
       },
       "ConfigView": {
         "type": "object",
-        "required": ["values", "order", "pending_restart"],
+        "required": ["values", "order", "pending_restart", "load_error"],
         "properties": {
           "values": {
             "type": "object",
@@ -363,7 +363,11 @@
           },
           "pending_restart": {
             "type": "boolean",
-            "description": "True when this domain's saved values differ from the ones the running process started with."
+            "description": "True only when the file-level server block differs from the one the process started with (restart to apply). Other changes apply live."
+          },
+          "load_error": {
+            "type": "string",
+            "description": "Empty when the last reload succeeded. Otherwise why the last hand edit could not be applied; values then show the last good config, which keeps running. Never includes secrets."
           }
         }
       },

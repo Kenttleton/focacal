@@ -58,6 +58,14 @@ func newConfigTestServer(t *testing.T) (*Server, string) {
 // to logOut.
 func newConfigTestServerLog(t *testing.T, logOut io.Writer) (*Server, string) {
 	t.Helper()
+	s, dir, _ := newConfigTestServerLive(t, logOut)
+	return s, dir
+}
+
+// newConfigTestServerLive also returns the Live so a test can reload after a
+// hand edit without running the watcher.
+func newConfigTestServerLive(t *testing.T, logOut io.Writer) (*Server, string, *config.Live) {
+	t.Helper()
 	t.Cleanup(simple.RevokeAll)
 	dir := t.TempDir()
 	for name, body := range map[string]string{
@@ -82,7 +90,7 @@ func newConfigTestServerLog(t *testing.T, logOut io.Writer) (*Server, string) {
 	s.SetConfigDir(dir)
 	s.SetConfigService(svc)
 	s.WrapHandler(simple.Middleware(func() bool { return true }, func() string { return testKey }, nil, log))
-	return s, dir
+	return s, dir, live
 }
 
 func doReq(t *testing.T, s *Server, method, path string, body []byte) *httptest.ResponseRecorder {
@@ -613,5 +621,48 @@ func TestOpenAPIDocuments503(t *testing.T) {
 		if _, ok := op.Responses["503"]; !ok {
 			t.Errorf("%s /config/{domain} lacks response 503", m)
 		}
+	}
+}
+
+func TestGetAfterBadHandEditReportsLoadError(t *testing.T) {
+	s, dir, live := newConfigTestServerLive(t, io.Discard)
+	bad := "working_hours:\n  start: \"25:99\"\n"
+	if err := os.WriteFile(filepath.Join(dir, "planner.yaml"), []byte(bad), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := live.Reload(); err == nil {
+		t.Fatal("Reload of a bad file returned nil")
+	}
+	rec := doReq(t, s, http.MethodGet, "/config/planner", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET = %d %s", rec.Code, rec.Body)
+	}
+	v := decodeView(t, rec)
+	if v.LoadError == "" {
+		t.Error("load_error is empty after a bad hand edit")
+	}
+	if b := rec.Body.String(); strings.Contains(b, "SECRETTOKEN") || strings.Contains(b, "SECRETPW") {
+		t.Errorf("response echoes file secrets: %s", b)
+	}
+	if wh, _ := v.Values["working_hours"].(map[string]any); wh["start"] != "09:00" {
+		t.Errorf("want last-good working_hours, got %v", v.Values["working_hours"])
+	}
+	if v.PendingRestart {
+		t.Error("a bad planner file must not set pending_restart")
+	}
+}
+
+func TestPatchAppServerPortSetsPendingRestart(t *testing.T) {
+	s, _ := newConfigTestServer(t)
+	rec := doReq(t, s, http.MethodPatch, "/config/app", []byte(`{"server":{"rest_port":6234}}`))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PATCH = %d %s", rec.Code, rec.Body)
+	}
+	if v := decodeView(t, rec); !v.PendingRestart {
+		t.Error("pending_restart = false after changing server.rest_port")
+	}
+	rec = doReq(t, s, http.MethodGet, "/config/app", nil)
+	if v := decodeView(t, rec); !v.PendingRestart {
+		t.Error("GET after server change: pending_restart = false")
 	}
 }

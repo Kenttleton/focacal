@@ -33,9 +33,37 @@ Each domain is read only from its own file. A `sources:` block left in
 `config.yaml` is ignored, and startup logs a warning naming it.
 
 Values you can set by hand and from the UI are the same values. The UI writes
-the file for the domain it edits, keeping comments and unknown keys, and the
-response says `pending_restart: true` until the process restarts with the new
-values.
+the file for the domain it edits. Changes apply live (see
+[Live reload](#live-reload)), except the `server:` block.
+
+### Live reload
+
+Focacal watches the config directory. A save from the UI, or a hand edit of a
+file, applies to the running process within about a second, with no restart.
+Sources, destinations, planner values (including `agent`), the OAuth redirect
+base, `auth.enabled` and the login follow the live config.
+
+- **`server:` needs a restart.** Ports, `bind_address` and `webhooks_enabled`
+  are bound at startup. `pending_restart` is true only while the `server:`
+  block on disk differs from the one the process started with; nothing else
+  sets it. The UI shows "Restart to apply server changes".
+- **A UI save rewrites the file.** Comments and unknown keys in the saved
+  domain's file are dropped (`config.example/` stays commented). The first
+  save of a file also writes every default of that domain into it.
+- **A bad hand edit is not applied.** If a file no longer parses or fails
+  validation, the previous config keeps running and `GET /config/{domain}`
+  returns `load_error` with the reason (secrets are never included) next to the last good values. Fix the file and
+  the next reload clears it.
+- **Bind mounts that drop events.** Some mounts (certain Docker Desktop and
+  network file systems) do not deliver file events. The watcher then falls
+  back to polling every 5 seconds.
+- **Removing a source purges its data.** Deleting a source (by hand or in the
+  UI) deletes its stored events and sync state. Its OAuth tokens are kept, so
+  re-adding the same id does not need `focacal auth` again.
+- **Resetting the login needs no restart.** Credentials are read per request,
+  so deleting `credentials.yaml` reopens `/auth/setup` immediately. Login
+  tokens already issued stay valid until the new setup completes (setup
+  revokes them all) or the process restarts.
 
 ### REST API
 
@@ -43,7 +71,7 @@ Each domain has one read and one write, behind the same auth as the rest of
 the API (`GET /openapi.json` has the full schema):
 
 - `GET /config/{domain}` (`app`, `planner`, `calendars`) returns
-  `{"values": {...}, "order": {...}, "pending_restart": false}`. `values` are
+  `{"values": {...}, "order": {...}, "pending_restart": false, "load_error": ""}`. `values` are
   the file values over the defaults (no environment overrides); collections are
   objects keyed by id (destinations by `id|calendar_id`) and `order` lists
   their ids in file order. Secrets are never returned; each source has
@@ -69,7 +97,8 @@ Secrets never go into the domain files through the API:
   docker-compose.yml passes `.env` into the container (`env_file`, optional).
   If the variable is not set, focacal still starts: it logs a warning naming
   the source and the variable (never a value), and only that calendar fails
-  to sync, with an error naming the variable, until you set it and restart.
+  to sync, with an error naming the variable, until you set it (environment
+  changes need a process restart).
   An ics source with neither `ics_url_env` nor `ics_url` is invalid. Pick
   names that are not config overrides (`FOCACAL_ICS_<NAME>` is safe).
 - CalDAV URLs must not embed credentials (`https://user:pw@host`). The API
@@ -87,7 +116,7 @@ Any value can be overridden at runtime with `FOCACAL_<SECTION>_<KEY>` (for
 example `FOCACAL_SERVER_REST_PORT=6233`), and `OAUTH_REDIRECT_BASE_URL`
 overrides `oauth.redirect_base_url`. Overrides change what the process runs
 with, not the files. The UI shows the file values, and an override never
-makes `pending_restart` true.
+makes `pending_restart` true. Environment variables are read at process start.
 
 ## What the database holds
 
@@ -139,7 +168,7 @@ do nothing. If `planner.yaml` or `calendars.yaml` already exists, the keys it
 lacks are merged into it. If it already holds one of the moved keys with a
 different value, startup stops with an error and changes nothing, rather than
 silently keep one copy. If the existing file is the sample from the repo,
-delete it and restart; otherwise reconcile the values by hand and remove the
+delete it and start again; otherwise reconcile the values by hand and remove the
 keys from `config.yaml`. (A key already present with the same value, left by
 an interrupted earlier run, counts as done, so an interrupted migration
 resumes.)
@@ -171,8 +200,9 @@ On Linux, make `config/` writable by uid 1001 (`sudo chown -R 1001 config`).
    OAuth source (tokens live in the DB, which you do not copy).
 4. The first sync and replan rebuild the DB.
 
-To reset the login, delete `credentials.yaml` and restart: `/auth/setup`
-opens again. If you no longer trust the old DB (for example, the instance was
+To reset the login, delete `credentials.yaml`: `/auth/setup`
+opens again, no restart needed (already issued login tokens stay valid until
+the new setup). If you no longer trust the old DB (for example, the instance was
 shared), stop focacal, delete `/data/focacal.db` and start again. It is
 rebuilt as above.
 

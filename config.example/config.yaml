@@ -6,6 +6,8 @@
 #   calendars.yaml  Calendars: sources, destinations and the OAuth redirect
 #   credentials.yaml  login (local only, gitignored, created by /auth/setup)
 # docker-compose.yml mounts it at /data/config. See docs/config-domains.md.
+# Edits apply live within about a second, except the server: block below,
+# which needs a restart. Saving from the UI rewrites this file without comments.
 #
 # Secrets (OAuth client secrets, agent api_key, ICS feed URLs) belong in .env,
 # not here; docker-compose.yml passes .env into the container. Every value

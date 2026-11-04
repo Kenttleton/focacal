@@ -1,12 +1,13 @@
 import { useState, useEffect } from 'react'
-import { Stack, TextInput, Select, Switch, Button, Text, Group, Title, Divider, Drawer, useMantineColorScheme } from '@mantine/core'
+import { Stack, TextInput, Select, Switch, Button, Text, Group, Title, Divider, Drawer, Alert, useMantineColorScheme } from '@mantine/core'
 import { api, loadCalendars } from './api'
 
-export default function Settings({ prefs, onPrefs }) {
+export default function Settings({ prefs, onPrefs, onSaved }) {
   const { colorScheme, setColorScheme } = useMantineColorScheme()
   const [sources, setSources] = useState([])
   const [dests, setDests] = useState([])
   const [pendingRestart, setPendingRestart] = useState(false)
+  const [loadError, setLoadError] = useState('')
   const [error, setError] = useState('')
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [drawerType, setDrawerType] = useState('source')
@@ -16,7 +17,7 @@ export default function Settings({ prefs, onPrefs }) {
   const load = async () => {
     try {
       const c = await loadCalendars()
-      setSources(c.sources); setDests(c.destinations); setPendingRestart(c.pendingRestart)
+      setSources(c.sources); setDests(c.destinations); setPendingRestart(c.pendingRestart); setLoadError(c.loadError)
     } catch (e) { setError(e.message) }
   }
   useEffect(() => { load() }, [])
@@ -30,7 +31,7 @@ export default function Settings({ prefs, onPrefs }) {
   const patchCalendars = async (patch) => {
     try {
       await api('/config/calendars', { method: 'PATCH', body: JSON.stringify(patch) })
-      setError(''); setDrawerOpen(false); await load()
+      setError(''); setDrawerOpen(false); await load(); if (onSaved) onSaved()
     } catch (e) { setError(e.message) }
   }
 
@@ -70,7 +71,8 @@ export default function Settings({ prefs, onPrefs }) {
         value={colorScheme} onChange={v => v && setColorScheme(v)} allowDeselect={false} />
 
       <Divider />
-      {pendingRestart && <Text size="sm" c="orange">Changes apply after restart.</Text>}
+      {loadError && <Alert color="yellow" title="A config file could not be loaded; the previous settings are still running">{loadError}</Alert>}
+      {pendingRestart && <Text size="sm" c="orange">Restart to apply server changes</Text>}
       {error && !drawerOpen && <Text size="sm" c="red">{error}</Text>}
       <Title order={4}>Sources</Title>
       <Text size="sm" c="dimmed">{(sources || []).length} configured</Text>

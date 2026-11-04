@@ -1,5 +1,7 @@
 # Planner: working hours, lunch, focus, scheduler agent and generated-event colors.
 # Portable: copy with the rest of the config directory.
+# Edits apply live within about a second. Saving from the UI rewrites this file
+# without comments, so keep notes in your copy of the sample, not the live file.
 
 working_hours:
   start: "09:00"

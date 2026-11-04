@@ -45,7 +45,7 @@ services:
       - focacal-data:/data
       # Config directory: config.yaml, planner.yaml, calendars.yaml and the
       # local-only credentials.yaml. Writable so the UI can save settings;
-      # edits are picked up on restart. See docs/config-domains.md.
+      # edits apply live except the server: block. See docs/config-domains.md.
       # On Linux the directory must be writable by uid 1001 (the container user).
       - ./config:/data/config
 

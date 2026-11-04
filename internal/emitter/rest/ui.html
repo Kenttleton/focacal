@@ -652,7 +652,7 @@ function focacal() {
         if (r.ok) {
           this.showSettings = false
           this.showToast(body.pending_restart
-            ? 'Settings saved — restart focacal to apply'
+            ? 'Settings saved — restart to apply server changes'
             : 'Settings saved')
         } else {
           this.showToast('Failed to save settings: ' + (body.error || r.status))

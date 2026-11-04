@@ -181,7 +181,9 @@ All commands run inside the container via the `focacal.sh` wrapper:
 ## Configuration reference
 
 The `config/` directory holds all non-secret settings, one file per domain.
-Changes take effect on container restart.
+Edits (from the UI or by hand) apply live within about a second; only the
+`server:` block (ports, bind address, webhooks) needs a restart. A UI save
+rewrites the file without its comments.
 
 | File | Holds |
 |---|---|
@@ -193,7 +195,7 @@ Changes take effect on container restart.
 The directory is portable: copy `config/` (and `.env`) to another host, run
 `focacal auth` for each OAuth source, and start. The SQLite DB holds only
 rebuildable state (synced events, OAuth tokens, planner output). To reset the
-login, delete `config/credentials.yaml` and restart; setup reopens. Full
+login, delete `config/credentials.yaml`; setup reopens with no restart. Full
 details, legacy keys and migration: [docs/config-domains.md](docs/config-domains.md).
 
 `lunch` and `focus` are legacy keys, to be replaced by planner rules (Routine,

@@ -127,14 +127,14 @@ func (s *Service) Get(d Domain) (View, error) {
 	if err != nil {
 		return View{}, err
 	}
+	// While the last reload failed (a file that no longer parses or
+	// validates), show the last good values with the recorded error rather
+	// than the broken file, so a UI can display load_error.
+	if s.live != nil && s.live.LoadError() != nil {
+		return s.view(d, s.live.fileConfig())
+	}
 	cfg, err := loadFiles(files)
 	if err != nil {
-		// A file that no longer parses: show the last good values with the
-		// recorded error rather than failing the read, so a UI can display
-		// load_error.
-		if s.live != nil && s.live.LoadError() != nil {
-			return s.view(d, s.live.fileConfig())
-		}
 		return View{}, err
 	}
 	return s.view(d, cfg)

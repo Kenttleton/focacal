@@ -41,12 +41,14 @@ export default function App() {
   const now = useNow()
   const zone = useDisplayTimezone()
 
+  const refreshSources = () => loadCalendars().then(c => setSources(c.sources)).catch(e => { if (e.message === 'unauthorized') setAuthed(false) })
+
   useEffect(() => {
     if (!authed) return
     api('/health').catch(() => { clearToken(); setAuthed(false) })
     // 401 clears the token in api(); 503 (config service unavailable) and other
     // failures leave the defaults: no sources listed, 09:00 working-hours start.
-    loadCalendars().then(c => setSources(c.sources)).catch(e => { if (e.message === 'unauthorized') setAuthed(false) })
+    refreshSources()
     api('/config/planner').then(v => setCfg(v?.values || null)).catch(e => { if (e.message === 'unauthorized') setAuthed(false) })
   }, [authed])
 
@@ -149,7 +151,7 @@ export default function App() {
             <div className="tb">{sidebarToggle}<Text fw={600}>{page === 'planner' ? 'Planner' : 'Settings'}</Text></div>
             <div style={{ flex: 1, overflow: 'auto', padding: 24 }}>
               {page === 'planner' && <Text c="dimmed">Planner is coming soon.</Text>}
-              {page === 'settings' && <Settings prefs={prefs} onPrefs={savePrefs} />}
+              {page === 'settings' && <Settings prefs={prefs} onPrefs={savePrefs} onSaved={refreshSources} />}
             </div>
           </>
         )}

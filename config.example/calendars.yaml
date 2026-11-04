@@ -1,6 +1,8 @@
 # Calendars: sources (accounts read from), destinations and the OAuth redirect.
 # Secrets do not belong here: use ics_url_env / credentials_file references.
 # Relative credentials_file / token_file paths resolve under this directory.
+# Edits apply live within about a second. Saving from the UI rewrites this file
+# without comments, so keep notes in your copy of the sample, not the live file.
 
 # Calendar sources — add one entry per Google or Outlook account.
 sources:
