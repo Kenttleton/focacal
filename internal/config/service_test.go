@@ -573,3 +573,146 @@ func TestConfigDirIsSelfContained(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadReadsOnlyEachDomainsOwnKeys(t *testing.T) {
+	t.Run("stray sources in config.yaml", func(t *testing.T) {
+		dir := t.TempDir()
+		stray := testAppYAML + "sources:\n  - id: a\n    type: google\n  - id: b\n    type: google\n"
+		if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(stray), 0644); err != nil {
+			t.Fatal(err)
+		}
+		svc, _ := newTestService(t, dir)
+		before, err := svc.Get(DomainCalendars)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(before.Order["sources"]) != 0 {
+			t.Fatalf("stray config.yaml sources leaked into calendars: %v", before.Order["sources"])
+		}
+		if _, err := svc.Patch(DomainCalendars, []byte(`{"sources":{"c":{"type":"google"}}}`)); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := LoadDir(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(cfg.Sources) != 1 || cfg.Sources[0].ID != "c" {
+			t.Errorf("loaded sources = %+v, want only c", cfg.Sources)
+		}
+		after, _ := svc.Get(DomainCalendars)
+		if !reflect.DeepEqual(after.Order["sources"], []string{"c"}) {
+			t.Errorf("Get after patch = %v, want [c] (what LoadDir sees)", after.Order["sources"])
+		}
+	})
+	t.Run("leftover working_hours in calendars.yaml", func(t *testing.T) {
+		dir := writeTestDir(t)
+		extra := testCalendarsYAML + "working_hours:\n  start: \"06:00\"\n  end: \"07:00\"\n  timezone: UTC\n"
+		if err := os.WriteFile(filepath.Join(dir, "calendars.yaml"), []byte(extra), 0644); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := LoadDir(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.WorkingHours.Start != "09:00" || cfg.WorkingHours.Timezone != "America/New_York" {
+			t.Errorf("planner.yaml overridden by calendars.yaml: %+v", cfg.WorkingHours)
+		}
+		svc, _ := newTestService(t, dir)
+		v, _ := svc.Get(DomainPlanner)
+		if s := obj(t, asMap(t, v), "values", "working_hours")["start"]; s != "09:00" {
+			t.Errorf("Get planner start = %v", s)
+		}
+	})
+}
+
+func TestPatchRestrictsReferences(t *testing.T) {
+	t.Setenv("FOCACAL_ICS_X", "https://secret.example/x.ics")
+	t.Setenv("SOME_SECRET", "https://secret.example/y.ics")
+	accepted := []string{
+		`{"sources":{"n":{"type":"ics","ics_url_env":"FOCACAL_ICS_X"}}}`,
+		`{"sources":{"work":{"credentials_file":"creds/work.json","token_file":"tokens/work.json"}}}`,
+		`{"destinations":{"out|x":{"type":"ics","ics_url_env":"FOCACAL_ICS_X"}}}`,
+	}
+	for _, body := range accepted {
+		t.Run("accept "+body, func(t *testing.T) {
+			svc, _ := newTestService(t, writeTestDir(t))
+			if _, err := svc.Patch(DomainCalendars, []byte(body)); err != nil {
+				t.Fatalf("err = %v", err)
+			}
+		})
+	}
+	rejected := []string{
+		`{"sources":{"n":{"type":"ics","ics_url_env":"SOME_SECRET"}}}`,
+		`{"sources":{"n":{"type":"ics","ics_url_env":"focacal_ics_x"}}}`,
+		`{"destinations":{"out|x":{"type":"ics","ics_url_env":"SOME_SECRET"}}}`,
+		`{"sources":{"work":{"token_file":"/data/focacal.db"}}}`,
+		`{"sources":{"work":{"credentials_file":"/etc/passwd"}}}`,
+		`{"sources":{"work":{"token_file":"../x"}}}`,
+		`{"sources":{"work":{"token_file":"a/../../x"}}}`,
+		`{"destinations":{"work|primary":{"token_file":"..\\x"}}}`,
+	}
+	for _, body := range rejected {
+		t.Run("reject "+body, func(t *testing.T) {
+			dir := writeTestDir(t)
+			svc, _ := newTestService(t, dir)
+			before := snapshotFiles(t, dir)
+			if _, err := svc.Patch(DomainCalendars, []byte(body)); !errors.Is(err, ErrValidation) {
+				t.Fatalf("err = %v, want ErrValidation", err)
+			}
+			assertFilesUnchanged(t, dir, before)
+		})
+	}
+}
+
+func TestPendingRestartClearsAfterAddThenDelete(t *testing.T) {
+	dir := t.TempDir()
+	started, err := LoadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc, err := NewService(dir, started)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := svc.Patch(DomainCalendars, []byte(`{"sources":{"c":{"type":"google"}}}`)); !v.PendingRestart {
+		t.Fatal("add should be pending")
+	}
+	v, err := svc.Patch(DomainCalendars, []byte(`{"sources":{"c":null}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.PendingRestart {
+		t.Error("empty list equals the started nil list; pending should be false")
+	}
+	if v, _ := svc.Patch(DomainPlanner, []byte(`{"colors":{"x":"#111111"}}`)); !v.PendingRestart {
+		t.Fatal("color add should be pending")
+	}
+	if v, _ := svc.Patch(DomainPlanner, []byte(`{"colors":{"x":null}}`)); v.PendingRestart {
+		t.Error("empty colors map equals started nil map; pending should be false")
+	}
+}
+
+func TestPatchColorKeysLowercased(t *testing.T) {
+	dir := writeTestDir(t)
+	svc, _ := newTestService(t, dir)
+	v, err := svc.Patch(DomainPlanner, []byte(`{"colors":{"Meeting":"#ff0000"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := obj(t, asMap(t, v), "values", "colors")["meeting"]; c != "#ff0000" {
+		t.Fatalf("colors.meeting = %v", c)
+	}
+	if v, err = svc.Patch(DomainPlanner, []byte(`{"colors":{"meeting":null}}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := obj(t, asMap(t, v), "values", "colors")["meeting"]; ok {
+		t.Error("null-delete of meeting did not remove the key written as Meeting")
+	}
+	b, _ := os.ReadFile(filepath.Join(dir, "planner.yaml"))
+	if strings.Contains(strings.ToLower(string(b)), "meeting") {
+		t.Errorf("planner.yaml still has a meeting color:\n%s", b)
+	}
+	if _, err := svc.Patch(DomainPlanner, []byte(`{"colors":{"Focus":"#1","focus":"#2"}}`)); !errors.Is(err, ErrBadRequest) {
+		t.Errorf("colliding keys: err = %v, want ErrBadRequest", err)
+	}
+}

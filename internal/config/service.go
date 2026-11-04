@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 
 	"github.com/spf13/viper"
@@ -113,7 +114,9 @@ func readDomainFiles(dir string) (map[Domain][]byte, error) {
 }
 
 // loadFiles merges the domain files over the defaults and unmarshals them,
-// without validating.
+// without validating. Each file contributes only its own domain's top-level
+// keys; anything else in it (a stray `sources:` in config.yaml, unread blocks
+// such as `ollama:`) is ignored, so one file can never override another.
 func loadFiles(files map[Domain][]byte) (*Config, error) {
 	v := viper.New()
 	applyDefaults(v)
@@ -123,7 +126,24 @@ func loadFiles(files map[Domain][]byte) (*Config, error) {
 		if len(bytes.TrimSpace(b)) == 0 {
 			continue
 		}
-		if err := v.MergeConfig(bytes.NewReader(b)); err != nil {
+		var all map[string]any
+		if err := yaml.Unmarshal(b, &all); err != nil {
+			return nil, fmt.Errorf("parse %s: %w", d.File(), err)
+		}
+		own := map[string]any{}
+		for _, dk := range domainKeys[d] {
+			if val, ok := all[dk.name]; ok {
+				own[dk.name] = val
+			}
+		}
+		if len(own) == 0 {
+			continue
+		}
+		filtered, err := yaml.Marshal(own)
+		if err != nil {
+			return nil, fmt.Errorf("parse %s: %w", d.File(), err)
+		}
+		if err := v.MergeConfig(bytes.NewReader(filtered)); err != nil {
 			return nil, fmt.Errorf("parse %s: %w", d.File(), err)
 		}
 	}
@@ -160,6 +180,9 @@ func (s *Service) Patch(d Domain, body []byte) (View, error) {
 	}
 	patch, err := decodePatch(body)
 	if err != nil {
+		return View{}, err
+	}
+	if err := lowerMapKeys(d, patch); err != nil {
 		return View{}, err
 	}
 	if err := checkPatch(d, patch); err != nil {
@@ -202,13 +225,64 @@ func (s *Service) Patch(d Domain, body []byte) (View, error) {
 	return s.view(d, saved)
 }
 
-// projection returns the typed values of d's keys in c, for comparison.
-func projection(c *Config, d Domain) []any {
+// lowerMapKeys lowercases the keys of map-typed values (colors) in patch,
+// because viper lowercases map keys on load: writing "Meeting" would read
+// back as "meeting", and a later null-delete of "meeting" would not find it.
+func lowerMapKeys(d Domain, patch map[string]any) error {
+	for _, dk := range domainKeys[d] {
+		if dk.typ.Kind() != reflect.Map {
+			continue
+		}
+		m, ok := patch[dk.name].(map[string]any)
+		if !ok {
+			continue
+		}
+		lowered := make(map[string]any, len(m))
+		for k, v := range m {
+			lk := strings.ToLower(k)
+			if _, dup := lowered[lk]; dup {
+				return badRequestf("%s: keys %q collide (keys are case-insensitive)", dk.name, lk)
+			}
+			lowered[lk] = v
+		}
+		patch[dk.name] = lowered
+	}
+	return nil
+}
+
+// projection returns d's values in c in a comparable form: JSON-decoded,
+// with empty lists and objects folded to nil, so an added-then-deleted item
+// (empty list on disk vs absent at start) compares equal.
+func projection(c *Config, d Domain) any {
 	var out []any
 	for _, dk := range domainKeys[d] {
-		out = append(out, dk.get(c))
+		v, err := jsonValue(dk.get(c))
+		if err != nil {
+			v = dk.get(c)
+		}
+		out = append(out, foldEmpty(v))
 	}
 	return out
+}
+
+func foldEmpty(v any) any {
+	switch t := v.(type) {
+	case []any:
+		if len(t) == 0 {
+			return nil
+		}
+		for i := range t {
+			t[i] = foldEmpty(t[i])
+		}
+	case map[string]any:
+		if len(t) == 0 {
+			return nil
+		}
+		for k := range t {
+			t[k] = foldEmpty(t[k])
+		}
+	}
+	return v
 }
 
 func (s *Service) view(d Domain, cfg *Config) (View, error) {
@@ -463,9 +537,44 @@ func checkValue(path string, v any, t reflect.Type, inItem bool) error {
 			if err := checkValue(p, m[k], ft, inItem); err != nil {
 				return err
 			}
+			if err := checkReference(p, k, m[k]); err != nil {
+				return err
+			}
 		}
 	default:
 		return badRequestf("%s: unsupported field type %s", path, t)
+	}
+	return nil
+}
+
+// envRefPattern limits API-set env references to Focacal's own namespace, so
+// the API cannot point a source at an arbitrary process variable.
+var envRefPattern = regexp.MustCompile(`^FOCACAL_[A-Z0-9_]+$`)
+
+// fileRefFields are file references set through the API. They must be
+// relative (resolved under the config dir) with no ".." segment, so the API
+// cannot aim a token write at an arbitrary file such as the DB.
+var fileRefFields = map[string]bool{"credentials_file": true, "token_file": true}
+
+// checkReference applies the API-only rules for *_env and file reference
+// fields (R12). Hand-written files and startup validation are not affected.
+func checkReference(path, field string, v any) error {
+	s, ok := v.(string)
+	if !ok || s == "" {
+		return nil // null or empty clears the reference
+	}
+	if strings.HasSuffix(field, "_env") && !envRefPattern.MatchString(s) {
+		return validationf("%s: env var name must match %s", path, envRefPattern)
+	}
+	if fileRefFields[field] {
+		if filepath.IsAbs(s) || strings.HasPrefix(s, "/") || strings.HasPrefix(s, `\`) || filepath.VolumeName(s) != "" {
+			return validationf("%s: must be a path relative to the config directory", path)
+		}
+		for _, seg := range strings.FieldsFunc(s, func(r rune) bool { return r == '/' || r == '\\' }) {
+			if seg == ".." {
+				return validationf("%s: must not contain \"..\"", path)
+			}
+		}
 	}
 	return nil
 }
