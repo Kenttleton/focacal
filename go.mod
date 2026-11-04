@@ -3,6 +3,7 @@ module github.com/Kenttleton/focacal
 go 1.26.0
 
 require (
+	github.com/fsnotify/fsnotify v1.10.1
 	github.com/go-chi/chi/v5 v5.1.0
 	github.com/google/uuid v1.6.0
 	github.com/spf13/cobra v1.8.1
@@ -13,7 +14,6 @@ require (
 )
 
 require (
-	github.com/fsnotify/fsnotify v1.10.1 // indirect
 	github.com/google/go-cmp v0.6.0 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	golang.org/x/mod v0.41.0 // indirect

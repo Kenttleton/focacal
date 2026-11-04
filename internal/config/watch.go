@@ -15,6 +15,27 @@ const (
 	defaultPollEvery = 5 * time.Second
 )
 
+// dirWatcher is the slice of fsnotify.Watcher that Watch uses; tests fake it.
+type dirWatcher interface {
+	Add(path string) error
+	Close() error
+	events() <-chan fsnotify.Event
+	errors() <-chan error
+}
+
+type fsWatcher struct{ *fsnotify.Watcher }
+
+func (w fsWatcher) events() <-chan fsnotify.Event { return w.Events }
+func (w fsWatcher) errors() <-chan error          { return w.Errors }
+
+func newFSWatcher() (dirWatcher, error) {
+	w, err := fsnotify.NewWatcher()
+	if err != nil {
+		return nil, err
+	}
+	return fsWatcher{w}, nil
+}
+
 // fileSig is what the poll compares: existence, size and mtime of one file.
 type fileSig struct {
 	exists bool
@@ -74,7 +95,7 @@ func (l *Live) Watch(ctx context.Context) error {
 	var errs <-chan error
 	newWatcher := l.newWatcher
 	if newWatcher == nil {
-		newWatcher = fsnotify.NewWatcher
+		newWatcher = newFSWatcher
 	}
 	w, err := newWatcher()
 	if err == nil {
@@ -86,7 +107,7 @@ func (l *Live) Watch(ctx context.Context) error {
 		l.log.Warn("config directory watcher unavailable; polling only", "dir", l.dir, "err", err)
 	} else {
 		defer w.Close()
-		events, errs = w.Events, w.Errors
+		events, errs = w.events(), w.errors()
 	}
 
 	last := l.statFiles(names)
@@ -108,6 +129,16 @@ func (l *Live) Watch(ctx context.Context) error {
 	}
 	// Catch anything that changed between NewLive and the watch being armed.
 	reload()
+	schedule := func() {
+		if pending && !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+		timer.Reset(debounce)
+		pending = true
+	}
 	const relevant = fsnotify.Write | fsnotify.Create | fsnotify.Rename | fsnotify.Remove
 
 	for {
@@ -122,20 +153,17 @@ func (l *Live) Watch(ctx context.Context) error {
 			if ev.Op&relevant == 0 || !names[filepath.Base(ev.Name)] {
 				continue
 			}
-			if pending && !timer.Stop() {
-				select {
-				case <-timer.C:
-				default:
-				}
-			}
-			timer.Reset(debounce)
-			pending = true
+			schedule()
 		case err, ok := <-errs:
 			if !ok {
 				events, errs = nil, nil
 				continue
 			}
-			if err != nil && !errors.Is(err, context.Canceled) {
+			if errors.Is(err, fsnotify.ErrEventOverflow) {
+				// Events were dropped: reload instead of trusting what we saw.
+				schedule()
+			}
+			if err != nil {
 				l.log.Warn("config directory watcher error", "err", err)
 			}
 		case <-timer.C:

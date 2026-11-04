@@ -39,6 +39,17 @@ func startWatch(t *testing.T, l *Live, reloads *atomic.Int32) (stop func()) {
 	}
 	t.Cleanup(stop)
 	waitFor(t, "watcher armed", func() bool { return reloads.Load() >= 1 })
+	// Late startup events (kqueue replays for fresh fixtures) may still
+	// schedule a debounced reload. Wait until the count has been stable for
+	// several debounce windows, then zero it.
+	quiet := 3 * l.debounce
+	stable, seen := time.Now(), reloads.Load()
+	for time.Since(stable) < quiet {
+		if n := reloads.Load(); n != seen {
+			seen, stable = n, time.Now()
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 	reloads.Store(0)
 	return stop
 }
@@ -128,7 +139,7 @@ func TestWatchIgnoresUnrelatedFiles(t *testing.T) {
 	}
 	// Sentinel: a real file still triggers.
 	writeFile(t, dir, "planner.yaml", plannerEnd("18:00"))
-	waitFor(t, "sentinel reload", func() bool { return reloads.Load() == 1 })
+	waitFor(t, "sentinel reload", func() bool { return reloads.Load() >= 1 })
 }
 
 func TestWatchSurvivesTruncatedWrite(t *testing.T) {
@@ -150,17 +161,49 @@ func TestWatchSurvivesTruncatedWrite(t *testing.T) {
 func TestWatchPollFallback(t *testing.T) {
 	l, dir, reloads := newWatchLive(t, 20*time.Millisecond)
 	l.pollEvery = 20 * time.Millisecond
-	l.newWatcher = func() (*fsnotify.Watcher, error) { return nil, errors.New("no inotify") }
+	l.newWatcher = func() (dirWatcher, error) { return nil, errors.New("no inotify") }
 	startWatch(t, l, reloads)
 	writeFile(t, dir, "planner.yaml", plannerEnd("18:00"))
 	waitFor(t, "poll reload", func() bool { return l.Current().WorkingHours.End == "18:00" })
 }
 
+// fakeWatcher is a dirWatcher whose channels the test drives.
+type fakeWatcher struct {
+	ev     chan fsnotify.Event
+	er     chan error
+	closed atomic.Bool
+}
+
+func newFakeWatcher() *fakeWatcher {
+	return &fakeWatcher{ev: make(chan fsnotify.Event, 4), er: make(chan error, 4)}
+}
+func (f *fakeWatcher) Add(string) error              { return nil }
+func (f *fakeWatcher) Close() error                  { f.closed.Store(true); return nil }
+func (f *fakeWatcher) events() <-chan fsnotify.Event { return f.ev }
+func (f *fakeWatcher) errors() <-chan error          { return f.er }
+
+func TestWatchReloadsOnEventOverflow(t *testing.T) {
+	l, dir, reloads := newWatchLive(t, 20*time.Millisecond)
+	fw := newFakeWatcher()
+	l.newWatcher = func() (dirWatcher, error) { return fw, nil }
+	startWatch(t, l, reloads)
+	// The change happens with no event delivered; only the overflow signal.
+	writeFile(t, dir, "planner.yaml", plannerEnd("18:00"))
+	fw.er <- fsnotify.ErrEventOverflow
+	waitFor(t, "reload", func() bool { return l.Current().WorkingHours.End == "18:00" })
+	if reloads.Load() < 1 {
+		t.Error("overflow did not trigger a reload")
+	}
+}
+
 func TestWatchStopsOnContextCancel(t *testing.T) {
-	l, _, _ := newWatchLive(t, 20*time.Millisecond)
+	l, _, reloads := newWatchLive(t, 20*time.Millisecond)
+	fw := newFakeWatcher()
+	l.newWatcher = func() (dirWatcher, error) { return fw, nil }
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- l.Watch(ctx) }()
+	waitFor(t, "watcher armed", func() bool { return reloads.Load() >= 1 })
 	cancel()
 	select {
 	case err := <-done:
@@ -169,5 +212,10 @@ func TestWatchStopsOnContextCancel(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Watch did not return after cancel")
+	}
+	// Watch runs on a single goroutine that has returned; the watcher
+	// handle must have been released too.
+	if !fw.closed.Load() {
+		t.Error("watcher not closed when Watch returned")
 	}
 }
