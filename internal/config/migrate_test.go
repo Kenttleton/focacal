@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -295,19 +296,173 @@ func TestMigrateRefusesToOverwriteCalendars(t *testing.T) {
 	assertFilesUnchanged(t, dir, before)
 }
 
-func TestMigrateSkipsWhenPlannerExists(t *testing.T) {
+func TestMigrateRefusesWhenPlannerExists(t *testing.T) {
 	dir := writeLegacy(t, "working_hours:\n  start: \"08:00\"\n")
 	if err := os.WriteFile(filepath.Join(dir, "planner.yaml"), []byte("working_hours:\n  start: \"10:00\"\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	before := snapshotFiles(t, dir)
-	if ok, err := MigrateLegacy(dir); err != nil || ok {
-		t.Fatalf("MigrateLegacy = %v, %v; want false, nil", ok, err)
+	ok, err := MigrateLegacy(dir)
+	if err == nil || ok {
+		t.Fatalf("MigrateLegacy = %v, %v; want an error", ok, err)
+	}
+	for _, want := range []string{"working_hours", "planner.yaml"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not name %q", err, want)
+		}
 	}
 	assertFilesUnchanged(t, dir, before)
-	if got := LegacyKeys(dir); !reflect.DeepEqual(got, []string{"working_hours"}) {
-		t.Errorf("LegacyKeys = %v", got)
+}
+
+// The documented upgrade used to be "mv config.yaml config/" into a checkout
+// whose config/ already holds the sample planner.yaml and calendars.yaml. The
+// user's values must not be silently replaced by the samples (R13).
+func TestMigrateRefusesLegacyNextToSampleFiles(t *testing.T) {
+	dir := t.TempDir()
+	for _, f := range []string{"planner.yaml", "calendars.yaml"} {
+		b, err := os.ReadFile(filepath.Join("..", "..", "config", f))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, f), b, 0644); err != nil {
+			t.Fatal(err)
+		}
 	}
+	custom := strings.Replace(legacyYAML, `start: "09:00"`, `start: "07:00"`, 1)
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(custom), 0644); err != nil {
+		t.Fatal(err)
+	}
+	before := snapshotFiles(t, dir)
+	_, err := MigrateLegacy(dir)
+	if err == nil {
+		t.Fatal("want an error: config.yaml holds planner/calendars keys and the targets exist")
+	}
+	for _, want := range []string{"planner.yaml", "calendars.yaml", "delete"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %q", err, want)
+		}
+	}
+	assertFilesUnchanged(t, dir, before)
+}
+
+// A crash after some target files were written must not wedge the next start:
+// target files equal to what the migration would write count as done.
+func TestMigrateResumesAfterCrash(t *testing.T) {
+	clean := writeLegacy(t, legacyYAML)
+	if ok, err := MigrateLegacy(clean); err != nil || !ok {
+		t.Fatalf("clean run = %v, %v", ok, err)
+	}
+	want := snapshotFiles(t, clean)
+
+	for name, remove := range map[string][]string{
+		"after calendars.yaml":    {"planner.yaml"},
+		"after planner.yaml":      {"calendars.yaml"},
+		"after both, before trim": nil,
+		"after credentials only":  {"planner.yaml", "calendars.yaml"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			for f, body := range want {
+				mode := os.FileMode(0644)
+				if f == CredentialsFile || f == "config.yaml.bak" {
+					mode = 0600
+				}
+				if err := os.WriteFile(filepath.Join(dir, f), []byte(body), mode); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// Crash state: config.yaml not yet trimmed, .bak not yet written.
+			if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(legacyYAML), 0644); err != nil {
+				t.Fatal(err)
+			}
+			os.Remove(filepath.Join(dir, "config.yaml.bak"))
+			for _, f := range remove {
+				os.Remove(filepath.Join(dir, f))
+			}
+			ok, err := MigrateLegacy(dir)
+			if err != nil || !ok {
+				t.Fatalf("rerun = %v, %v; want true, nil", ok, err)
+			}
+			if got := snapshotFiles(t, dir); !reflect.DeepEqual(got, want) {
+				t.Errorf("resumed result differs from a clean migration:\n got %v\nwant %v", got, want)
+			}
+		})
+	}
+}
+
+// Anchors defined under one domain's key and aliased under another's would
+// leave a dangling alias in one of the new files. Refuse, write nothing.
+func TestMigrateRejectsCrossDomainAnchors(t *testing.T) {
+	dir := writeLegacy(t, "server:\n  bind_address: &b \"0.0.0.0\"\nworking_hours:\n  start: \"09:00\"\n  timezone: *b\n")
+	before := snapshotFiles(t, dir)
+	if _, err := MigrateLegacy(dir); err == nil {
+		t.Fatal("want an error for an alias across domain files")
+	}
+	assertFilesUnchanged(t, dir, before)
+}
+
+// A failure before config.yaml is rewritten removes everything this run
+// created and leaves config.yaml as it was.
+func TestMigrateCleansUpOnFailure(t *testing.T) {
+	dir := writeLegacy(t, legacyYAML)
+	// A directory where the backup should go makes the .bak write fail after
+	// credentials, planner.yaml and calendars.yaml were written.
+	if err := os.Mkdir(filepath.Join(dir, "config.yaml.bak"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	before := snapshotDir(t, dir)
+	if _, err := MigrateLegacy(dir); err == nil {
+		t.Fatal("want an error when the backup cannot be written")
+	}
+	if got := snapshotDir(t, dir); !reflect.DeepEqual(got, before) {
+		t.Errorf("dir changed after failed migration:\nbefore %v\nafter  %v", before, got)
+	}
+}
+
+// Once the config.yaml rewrite has started, credentials.yaml must survive a
+// failure: the in-place fallback may already have truncated config.yaml.
+func TestMigrateKeepsCredentialsWhenConfigWriteFails(t *testing.T) {
+	dir := writeLegacy(t, legacyYAML)
+	renameFile = func(string, string) error { return os.ErrPermission }
+	t.Cleanup(func() { renameFile = os.Rename })
+	if err := os.Chmod(filepath.Join(dir, "config.yaml"), 0444); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := MigrateLegacy(dir); err == nil {
+		t.Fatal("want an error when config.yaml cannot be rewritten")
+	}
+	if c, ok, _ := LoadCredentials(dir); !ok || c.PasswordHash != "$2a$10$hashhashhash" {
+		t.Fatalf("credentials lost after a failed config.yaml rewrite: %+v %v", c, ok)
+	}
+	// After the cause is fixed the next start completes the migration.
+	renameFile = os.Rename
+	if err := os.Chmod(filepath.Join(dir, "config.yaml"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := MigrateLegacy(dir); err != nil || !ok {
+		t.Fatalf("rerun = %v, %v", ok, err)
+	}
+	if keys := LegacyKeys(dir); len(keys) != 0 {
+		t.Errorf("legacy keys left: %v", keys)
+	}
+}
+
+// snapshotDir is snapshotFiles that also records subdirectories.
+func snapshotDir(t *testing.T, dir string) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			out[e.Name()] = "<dir>"
+			continue
+		}
+		out[e.Name()] = readFile(t, filepath.Join(dir, e.Name()))
+	}
+	return out
 }
 
 // The example config/ shipped in the repo must load as-is, need no
@@ -338,7 +493,17 @@ func TestRepoConfigDirIsCleanNewLayout(t *testing.T) {
 	if keys := LegacyKeys(dir); len(keys) > 0 {
 		t.Errorf("config/config.yaml holds domain keys %v", keys)
 	}
-	if _, err := os.Stat(filepath.Join(src, CredentialsFile)); !os.IsNotExist(err) {
-		t.Errorf("config/credentials.yaml must not be in the repo")
+	// Tracked files, not the working tree: a local run may leave a
+	// (gitignored) credentials.yaml in config/.
+	out, err := exec.Command("git", "ls-files", src).Output()
+	if err != nil {
+		t.Skipf("git ls-files: %v", err)
+	}
+	var tracked []string
+	for _, f := range strings.Fields(string(out)) {
+		tracked = append(tracked, filepath.Base(f))
+	}
+	if want := []string{"calendars.yaml", "config.yaml", "planner.yaml"}; !reflect.DeepEqual(tracked, want) {
+		t.Errorf("tracked config/ files = %v, want %v (never credentials.yaml or *.bak)", tracked, want)
 	}
 }

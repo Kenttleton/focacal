@@ -47,15 +47,19 @@ the scheduler agent in `config/config.yaml`. See
 $EDITOR config/planner.yaml config/calendars.yaml
 ```
 
-Upgrading from a single `config.yaml`? Move it into `config/` (`mkdir -p config && mv config.yaml config/`);
-focacal splits it into the new files on first start and keeps `config.yaml.bak`.
+Upgrading from a single `config.yaml`? Delete the sample `config/planner.yaml` and
+`config/calendars.yaml`, then move your file in
+(`rm -f config/planner.yaml config/calendars.yaml && mv config.yaml config/config.yaml`).
+focacal splits it into the new files on first start and keeps `config.yaml.bak`;
+it refuses to start, changing nothing, if those sample files are still there.
 
 ### 2. Start the stack
 
 **Option A — Ollama runs separately (already installed locally or remotely):**
 
 ```bash
-# Set OLLAMA_BASE_URL in .env to point at your Ollama instance
+# Set FOCACAL_AGENT_BASE_URL in .env to your Ollama instance, with /v1
+# (e.g. http://host.docker.internal:11434/v1)
 docker compose up -d
 ```
 
@@ -439,7 +443,7 @@ Run `focacal sync` and check `docker compose logs focacal` for sync errors.
 Ensure the source is authorized (`focacal auth` completed successfully).
 
 **Ollama model not responding**
-Check `OLLAMA_BASE_URL` in `.env`. Test with:
+Check `FOCACAL_AGENT_BASE_URL` in `.env` (it must end in `/v1`). Test with:
 ```bash
 curl http://localhost:11434/api/tags
 ```

@@ -9,12 +9,13 @@ instance. The SQLite database holds only state that can be rebuilt.
 | How focacal runs | Config directory |
 |---|---|
 | `docker compose up` | `./config` on the host, mounted at `/data/config` |
-| `focacal --config <path>` | `<path>` if it is a directory; if it is a file (the old `config.yaml` form), its directory |
+| `focacal --config <path>` | `<path>` if it is a directory; if it is a file (the old `config.yaml` form), its directory. The directory must exist: a mistyped path is an error, not a fresh instance |
 | no `--config` | the first of `/data/config`, `$HOME/.config/focacal`, `.` that holds a config file |
 | nothing found | the first of `/data/config`, `$HOME/.config/focacal` that exists as a directory; otherwise `/data/config` when `/data` exists (the container image), else `./config` |
 
-The directory is created if it is missing, and focacal then starts from the
-built-in defaults. `.` is searched but never chosen as an empty default, so a
+Without `--config`, the directory is created if it is missing, and focacal
+then starts from the built-in defaults; startup logs a warning that first-run
+`/auth/setup` is open. `.` is searched but never chosen as an empty default, so a
 bare `focacal start` does not scatter files into whatever directory you ran it
 from.
 
@@ -93,8 +94,10 @@ generated on first start and printed once.
 On start, before loading, focacal checks the config directory's `config.yaml`:
 
 1. If it holds `working_hours`, `lunch`, `focus`, `colors`, `sources` or
-   `destinations` and `planner.yaml` does not exist, those keys move to
-   `planner.yaml` and `calendars.yaml`, comments included.
+   `destinations`, those keys move to `planner.yaml` and `calendars.yaml`,
+   comments included. The result is loaded and validated first; if it would
+   not load (for example a YAML alias pointing at an anchor in another
+   section) or would change any value, nothing is written.
 2. If it holds `auth.username` / `auth.password_hash`, they move to
    `credentials.yaml` (created 0600). An existing `credentials.yaml` is never
    overwritten. `auth.session_token` is dropped.
@@ -102,9 +105,13 @@ On start, before loading, focacal checks the config directory's `config.yaml`:
    contain the password hash). Unknown keys stay in `config.yaml`.
 
 The migration runs once. After it, nothing is left to move and later starts
-do nothing. If `calendars.yaml` already exists while `config.yaml` still has
-`sources`, startup stops with an error rather than pick one. Merge them by
-hand.
+do nothing. If `planner.yaml` or `calendars.yaml` already exists while
+`config.yaml` still holds keys for it, startup stops with an error and
+changes nothing, rather than silently keep one copy. If the existing file is
+the sample from the repo, delete it and restart; otherwise merge the keys
+into it by hand and remove them from `config.yaml`. (A target file that
+already holds exactly what the migration would write, left by an interrupted
+earlier run, counts as done, so an interrupted migration resumes.)
 
 ### Upgrading a Docker install
 
@@ -114,8 +121,11 @@ login, which reopens first-run setup. To upgrade:
 
 ```bash
 docker compose down
-mkdir -p config && mv config.yaml config/
 # take the new docker-compose.yml (mounts ./config:/data/config)
+# The repo's config/ ships sample planner.yaml and calendars.yaml: delete
+# them first, or the migration refuses to overwrite them.
+rm -f config/planner.yaml config/calendars.yaml
+mkdir -p config && mv config.yaml config/config.yaml
 docker compose up -d     # migrates config/config.yaml on first start
 ```
 

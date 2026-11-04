@@ -1,6 +1,8 @@
 package config
 
 import (
+	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -47,16 +49,16 @@ func defaultDirPaths() dirPaths {
 //
 // With flag set (--config) it accepts a directory or a legacy file path; a
 // file path (an existing file, or a missing path ending in .yaml/.yml) means
-// its directory. Without a flag the search path is /data/config,
-// $HOME/.config/focacal, then "."; the first that holds config.yaml,
-// planner.yaml, calendars.yaml or credentials.yaml wins. If none does, a
-// legacy single-file mount at /data/config.yaml returns /data with
-// DirLegacy; the CLI refuses to start on it and asks for a directory mount.
-// Otherwise the first existing directory among /data/config and
-// $HOME/.config/focacal is used ("." is skipped: it always exists and would
-// scatter files into the working directory), and failing that /data/config
-// when /data exists (the container image, where the DB lives) or ./config
-// otherwise.
+// its directory. The CLI then requires that directory to exist (CheckFlagDir).
+// Without a flag the search path is /data/config, $HOME/.config/focacal,
+// then "."; the first that holds config.yaml, planner.yaml, calendars.yaml or
+// credentials.yaml wins. Otherwise the first existing directory among
+// /data/config and $HOME/.config/focacal is used ("." is skipped: it always
+// exists and would scatter files into the working directory). Failing that,
+// a non-empty legacy single-file mount at /data/config.yaml returns /data
+// with DirLegacy (the CLI refuses to start on it and asks for a directory
+// mount); otherwise /data/config when /data exists (the container image,
+// where the DB lives) or ./config.
 func ResolveDir(flag string) (string, DirSource) { return defaultDirPaths().resolve(flag) }
 
 func (p dirPaths) resolve(flag string) (string, DirSource) {
@@ -79,13 +81,13 @@ func (p dirPaths) resolve(flag string) (string, DirSource) {
 			return d, DirFound
 		}
 	}
-	if isFile(filepath.Join(p.legacy, DomainApp.File())) {
-		return p.legacy, DirLegacy
-	}
 	for _, d := range p.existing {
 		if isDir(d) {
 			return d, DirExisting
 		}
+	}
+	if nonEmptyFile(filepath.Join(p.legacy, DomainApp.File())) {
+		return p.legacy, DirLegacy
 	}
 	if isDir(p.dataRoot) {
 		return filepath.Join(p.dataRoot, "config"), DirDefault
@@ -100,6 +102,29 @@ func hasConfigFile(dir string) bool {
 		}
 	}
 	return isFile(filepath.Join(dir, CredentialsFile))
+}
+
+func nonEmptyFile(p string) bool {
+	b, err := os.ReadFile(p)
+	return err == nil && len(bytes.TrimSpace(b)) > 0
+}
+
+// HasConfigFiles reports whether dir holds any domain file or
+// credentials.yaml.
+func HasConfigFiles(dir string) bool { return hasConfigFile(dir) }
+
+// CheckFlagDir returns an error when the directory a --config value resolved
+// to does not exist. A typo must not silently start a fresh instance with
+// /auth/setup open; the search-path defaults, by contrast, are created.
+func CheckFlagDir(dir string) error {
+	st, err := os.Stat(dir)
+	if err != nil {
+		return fmt.Errorf("--config: %w (create the directory, or fix the path)", err)
+	}
+	if !st.IsDir() {
+		return fmt.Errorf("--config: %s is not a directory", dir)
+	}
+	return nil
 }
 
 func isFile(p string) bool { st, err := os.Stat(p); return err == nil && st.Mode().IsRegular() }

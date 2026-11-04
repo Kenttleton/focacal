@@ -21,6 +21,10 @@ func TestLoadStartAppliesEnvToRunningOnly(t *testing.T) {
 	if running.Server.RESTPort != 7000 || running.OAuth.RedirectBaseURL != "https://cal.example" {
 		t.Errorf("running lacks env overrides: %+v %+v", running.Server, running.OAuth)
 	}
+	t.Setenv("FOCACAL_AGENT_BASE_URL", "http://ollama:11434/v1")
+	if _, r2, err := LoadStart(dir); err != nil || r2.Agent.BaseURL != "http://ollama:11434/v1" {
+		t.Errorf("FOCACAL_AGENT_BASE_URL not applied: %v %+v", err, r2)
+	}
 	// pending_restart compares the files with started; env must not trip it.
 	svc, err := NewService(dir, started)
 	if err != nil {
@@ -170,6 +174,26 @@ func TestResolveDir(t *testing.T) {
 			t.Errorf("got %q", got)
 		}
 	})
+	t.Run("empty legacy placeholder is not a legacy mount", func(t *testing.T) {
+		mkdirs(t, base, "data")
+		defer os.RemoveAll(data)
+		if err := os.WriteFile(filepath.Join(data, "config.yaml"), []byte("\n  \n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		got, how := paths.resolve("")
+		if how == DirLegacy || got != filepath.Join(data, "config") {
+			t.Errorf("got %q (%s), want default /data/config", got, how)
+		}
+	})
+	t.Run("existing config dir wins over a legacy file", func(t *testing.T) {
+		mkdirs(t, base, "data/config")
+		defer os.RemoveAll(data)
+		touch(t, filepath.Join(data, "config.yaml"))
+		got, how := paths.resolve("")
+		if how == DirLegacy || got != filepath.Join(data, "config") {
+			t.Errorf("got %q (%s), want the existing /data/config", got, how)
+		}
+	})
 	t.Run("legacy single-file mount", func(t *testing.T) {
 		mkdirs(t, base, "data")
 		defer os.RemoveAll(data)
@@ -179,4 +203,14 @@ func TestResolveDir(t *testing.T) {
 			t.Errorf("got %q (%s), want legacy /data", got, how)
 		}
 	})
+}
+
+func TestCheckFlagDir(t *testing.T) {
+	base := t.TempDir()
+	if err := CheckFlagDir(filepath.Join(base, "typo")); err == nil {
+		t.Error("a missing --config directory must be an error")
+	}
+	if err := CheckFlagDir(base); err != nil {
+		t.Errorf("existing directory: %v", err)
+	}
 }

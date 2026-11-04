@@ -19,8 +19,9 @@ services:
       # For local use: http://localhost:8080 (the default)
       OAUTH_REDIRECT_BASE_URL: "${OAUTH_REDIRECT_BASE_URL:-http://localhost:8080}"
 
-      # Ollama — override with your Ollama instance URL if running separately.
-      OLLAMA_BASE_URL: "${OLLAMA_BASE_URL:-http://host.docker.internal:11434}"
+      # Scheduler agent endpoint (OpenAI-compatible; note the /v1 suffix).
+      # Overrides agent.base_url in config/config.yaml.
+      FOCACAL_AGENT_BASE_URL: "${FOCACAL_AGENT_BASE_URL:-http://host.docker.internal:11434/v1}"
 
       # Google OAuth credentials (required if you have a google source).
       GOOGLE_CLIENT_ID: "${GOOGLE_CLIENT_ID:-}"

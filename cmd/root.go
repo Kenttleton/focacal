@@ -55,8 +55,15 @@ func loadConfig(log *slog.Logger) (dir string, started, running *config.Config, 
 		return "", nil, nil, fmt.Errorf("found a legacy single-file config at %s/config.yaml: "+
 			"move config.yaml into ./config/ on the host and mount ./config:/data/config "+
 			"(see docs/config-domains.md); it is migrated on the next start", dir)
-	case config.DirDefault, config.DirExisting:
-		log.Info("no config files found; starting from defaults", "dir", dir)
+	case config.DirFlag:
+		// A mistyped --config must not become a fresh instance.
+		if err := config.CheckFlagDir(dir); err != nil {
+			return "", nil, nil, err
+		}
+	}
+	if !config.HasConfigFiles(dir) {
+		log.Warn("no config files in the config directory; starting from defaults with first-run /auth/setup open",
+			"dir", dir, "how", how)
 	}
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return "", nil, nil, fmt.Errorf("config dir %s: %w", dir, err)

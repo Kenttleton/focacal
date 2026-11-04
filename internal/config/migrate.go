@@ -1,11 +1,14 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -27,27 +30,35 @@ var newFileHeaders = map[Domain]string{
 	DomainCalendars: "# Calendars: sources (accounts read from) and destinations.\n# Secrets do not belong here: use ics_url_env / credentials_file references.",
 }
 
-// movedDomains are the domains whose keys used to live in config.yaml, in the
-// order their files are written. planner.yaml is written last because its
-// presence is what marks a directory as migrated.
-var movedDomains = []Domain{DomainCalendars, DomainPlanner}
+// movedDomains are the domains whose keys used to live in config.yaml, in
+// the order their files are written.
+var movedDomains = []Domain{DomainPlanner, DomainCalendars}
 
 // MigrateLegacy converts a legacy single-file config in dir to the directory
 // layout. It runs at startup before LoadDir.
 //
 // When config.yaml holds planner or calendars keys (working_hours, lunch,
-// focus, colors, sources, destinations) and planner.yaml is absent, those
-// keys move to planner.yaml and calendars.yaml with their comments. When
-// config.yaml holds auth.username or auth.password_hash, they move to
-// credentials.yaml (created 0600; an existing credentials.yaml is never
-// overwritten) and auth.session_token is dropped. The original file is kept
-// as config.yaml.bak (0600: it may hold the password hash). Unknown keys stay
-// in config.yaml.
+// focus, colors, sources, destinations), those keys move to planner.yaml and
+// calendars.yaml with their comments. When config.yaml holds auth.username or
+// auth.password_hash, they move to credentials.yaml (created 0600; an
+// existing credentials.yaml is never overwritten) and auth.session_token is
+// dropped. The original file is kept as config.yaml.bak (0600: it may hold
+// the password hash). Unknown keys stay in config.yaml.
+//
+// A target file that already exists must hold exactly what this migration
+// would write (a rerun after a crash); otherwise MigrateLegacy returns an
+// error and changes nothing, because one of the two copies would be lost.
+// The migrated result is loaded and validated, and compared with what the
+// single file meant, before anything is written.
+//
+// Files are written credentials, planner.yaml, calendars.yaml, the backup,
+// then config.yaml. A failure before config.yaml is rewritten removes what
+// this run created. Once the rewrite has started nothing is removed: the
+// in-place fallback may already have changed config.yaml, and the next start
+// resumes from the files left behind.
 //
 // It is idempotent: once nothing is left to move it returns false and writes
-// nothing. It refuses (error, nothing written) when calendars.yaml already
-// exists and config.yaml still holds sources or destinations, since one of
-// the two would be lost.
+// nothing.
 func MigrateLegacy(dir string) (migrated bool, err error) {
 	appPath := filepath.Join(dir, DomainApp.File())
 	original, err := os.ReadFile(appPath)
@@ -57,99 +68,195 @@ func MigrateLegacy(dir string) (migrated bool, err error) {
 		}
 		return false, fmt.Errorf("migrate: read %s: %w", DomainApp.File(), err)
 	}
-	var probe yaml.Node
-	if err := yaml.Unmarshal(original, &probe); err != nil {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(original, &doc); err != nil {
 		return false, fmt.Errorf("migrate: parse %s: %w", DomainApp.File(), err)
 	}
-	root := rootMapping(&probe)
+	root := rootMapping(&doc)
 	if root == nil {
 		return false, nil
 	}
-
-	plannerExists, err := exists(filepath.Join(dir, DomainPlanner.File()))
-	if err != nil {
-		return false, err
-	}
-	var move map[Domain][]string
-	if !plannerExists {
-		move = legacyDomainKeys(root)
-	}
+	move := legacyDomainKeys(root)
 	creds := hasLegacyCredentials(root)
 	if len(move) == 0 && !creds {
 		return false, nil
 	}
+
+	// Build every output from this one parse.
+	var c Credentials
+	if creds {
+		c = stripCredentials(root)
+	}
+	pairs := extractPairs(&doc, root, move)
+	out := map[Domain][]byte{}
 	for _, d := range movedDomains {
-		if len(move[d]) == 0 {
+		if len(pairs[d]) == 0 {
 			continue
 		}
-		ok, err := exists(filepath.Join(dir, d.File()))
-		if err != nil {
-			return false, err
+		nd := &yaml.Node{Kind: yaml.DocumentNode, HeadComment: newFileHeaders[d],
+			Content: []*yaml.Node{{Kind: yaml.MappingNode, Content: pairs[d]}}}
+		if out[d], err = encodeYAML(nd); err != nil {
+			return false, fmt.Errorf("migrate: encode %s: %w", d.File(), err)
 		}
-		if ok {
-			return false, fmt.Errorf("migrate: %s still holds %v but %s already exists; merge them by hand",
-				DomainApp.File(), move[d], d.File())
+	}
+	if out[DomainApp], err = encodeYAML(&doc); err != nil {
+		return false, fmt.Errorf("migrate: encode %s: %w", DomainApp.File(), err)
+	}
+
+	// Targets that exist must already hold the migrated content.
+	write := map[Domain]bool{}
+	var conflicts []string
+	for _, d := range movedDomains {
+		if out[d] == nil {
+			continue
 		}
+		existing, err := os.ReadFile(filepath.Join(dir, d.File()))
+		switch {
+		case os.IsNotExist(err):
+			write[d] = true
+		case err != nil:
+			return false, fmt.Errorf("migrate: read %s: %w", d.File(), err)
+		case !bytes.Equal(existing, out[d]):
+			conflicts = append(conflicts, fmt.Sprintf("%s (for %s)", d.File(), strings.Join(move[d], ", ")))
+		}
+	}
+	if len(conflicts) > 0 {
+		return false, fmt.Errorf("migrate: %s in %s is a legacy single-file config, but %s already exist(s); nothing was changed. "+
+			"If those are the sample files shipped in the repo, delete them and restart to migrate; "+
+			"otherwise merge the keys into them by hand and remove the keys from %s",
+			DomainApp.File(), dir, strings.Join(conflicts, " and "), DomainApp.File())
+	}
+
+	if err := checkMigrated(dir, original, out, move); err != nil {
+		return false, err
 	}
 
 	var created []string
-	cleanup := func() {
+	fail := func(err error) (bool, error) {
 		for _, p := range created {
 			os.Remove(p)
 		}
+		return false, err
 	}
-	// The closure runs on the writer's own parse of config.yaml; returning an
-	// error leaves config.yaml untouched.
-	err = NewWriter(appPath).Update(func(doc *yaml.Node) error {
-		root := rootMapping(doc)
-		if root == nil {
-			return errors.New("migrate: config.yaml root is not a mapping")
+	if creds && c.PasswordHash != "" {
+		switch err := SetupCredentials(dir, c); {
+		case err == nil:
+			created = append(created, credentialsPath(dir))
+		case errors.Is(err, ErrAlreadyConfigured):
+			// credentials.yaml wins: it is newer than the legacy hash.
+		default:
+			return fail(fmt.Errorf("migrate: %w", err))
 		}
-		if creds {
-			p, err := moveCredentials(dir, root)
-			if err != nil {
-				return err
-			}
-			if p != "" {
-				created = append(created, p)
-			}
+	}
+	for _, d := range movedDomains {
+		if !write[d] {
+			continue
 		}
-		pairs := extractPairs(doc, root, move)
-		for _, d := range movedDomains {
-			if len(pairs[d]) == 0 {
-				continue
-			}
-			p := filepath.Join(dir, d.File())
-			err := NewWriter(p).Update(func(nd *yaml.Node) error {
-				nd.HeadComment = newFileHeaders[d]
-				m := nd.Content[0]
-				m.Content = append(m.Content, pairs[d]...)
-				return nil
-			})
-			if err != nil {
-				return fmt.Errorf("migrate: write %s: %w", d.File(), err)
-			}
-			created = append(created, p)
+		p := filepath.Join(dir, d.File())
+		if err := writeNew(p, out[d]); err != nil {
+			return fail(fmt.Errorf("migrate: write %s: %w", d.File(), err))
 		}
-		bak := appPath + ".bak"
-		if err := os.WriteFile(bak, original, 0600); err != nil {
-			return fmt.Errorf("migrate: write backup: %w", err)
+		created = append(created, p)
+	}
+	bak := appPath + ".bak"
+	if err := os.WriteFile(bak, original, 0600); err != nil {
+		return fail(fmt.Errorf("migrate: write backup: %w", err))
+	}
+	if err := os.Chmod(bak, 0600); err != nil {
+		return fail(fmt.Errorf("migrate: chmod backup: %w", err))
+	}
+	// From here on nothing is removed (see the doc comment).
+	err = NewWriter(appPath).Update(func(d *yaml.Node) error {
+		var trimmed yaml.Node
+		if err := yaml.Unmarshal(out[DomainApp], &trimmed); err != nil {
+			return err
 		}
-		if err := os.Chmod(bak, 0600); err != nil {
-			return fmt.Errorf("migrate: chmod backup: %w", err)
+		if trimmed.Kind == 0 {
+			trimmed = yaml.Node{Kind: yaml.DocumentNode, Content: []*yaml.Node{{Kind: yaml.MappingNode}}}
 		}
+		*d = trimmed
 		return nil
 	})
 	if err != nil {
-		cleanup()
-		return false, err
+		return false, fmt.Errorf("migrate: rewrite %s (credentials and new files kept; the next start resumes): %w",
+			DomainApp.File(), err)
 	}
 	return true, nil
 }
 
+// checkMigrated loads the would-be directory (out over the files already in
+// dir) and checks it parses, validates, and means what the single file meant
+// for App and every moved domain.
+func checkMigrated(dir string, original []byte, out map[Domain][]byte, move map[Domain][]string) error {
+	files, err := readDomainFiles(dir)
+	if err != nil {
+		return fmt.Errorf("migrate: %w", err)
+	}
+	for d, b := range out {
+		files[d] = b
+	}
+	got, err := loadFiles(files)
+	if err != nil {
+		return fmt.Errorf("migrate: migrated files do not load (YAML anchors/aliases across sections are not supported; expand them by hand): %w", err)
+	}
+	if err := got.Validate(); err != nil {
+		return fmt.Errorf("migrate: migrated config is invalid: %w", err)
+	}
+	want, err := loadFiles(map[Domain][]byte{DomainApp: original, DomainPlanner: original, DomainCalendars: original})
+	if err != nil {
+		return fmt.Errorf("migrate: %w", err)
+	}
+	check := []Domain{DomainApp}
+	for _, d := range movedDomains {
+		if len(move[d]) > 0 {
+			check = append(check, d)
+		}
+	}
+	for _, d := range check {
+		if !reflect.DeepEqual(projection(got, d), projection(want, d)) {
+			return fmt.Errorf("migrate: migrated %s would change values; nothing was changed", d.File())
+		}
+	}
+	return nil
+}
+
+// encodeYAML encodes doc the way Writer does.
+func encodeYAML(doc *yaml.Node) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+	if err := enc.Encode(doc); err != nil {
+		return nil, err
+	}
+	if err := enc.Close(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// writeNew creates p with b (0644), failing if p exists.
+func writeNew(p string, b []byte) error {
+	f, err := os.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
+	if err != nil {
+		return err
+	}
+	_, err = f.Write(b)
+	if err == nil {
+		err = f.Sync()
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		os.Remove(p)
+	}
+	return err
+}
+
 // LegacyKeys returns the planner and calendars keys still present in dir's
 // config.yaml. They are ignored on load (each domain is read only from its
-// own file), so startup warns about them. Errors yield nil.
+// own file); MigrateLegacy moves them or refuses, so after it succeeds this
+// is normally empty. Errors yield nil.
 func LegacyKeys(dir string) []string {
 	b, err := os.ReadFile(filepath.Join(dir, DomainApp.File()))
 	if err != nil {
@@ -223,11 +330,9 @@ func hasLegacyCredentials(root *yaml.Node) bool {
 	return false
 }
 
-// moveCredentials copies auth.username and auth.password_hash to
-// credentials.yaml unless that file exists, then removes all
-// legacyCredentialKeys from auth (and auth itself if left empty). It returns
-// the path it created, if any.
-func moveCredentials(dir string, root *yaml.Node) (string, error) {
+// stripCredentials returns auth.username and auth.password_hash and removes
+// all legacyCredentialKeys from auth (and auth itself if left empty).
+func stripCredentials(root *yaml.Node) Credentials {
 	auth := authMapping(root)
 	scalar := func(k string) string {
 		if i := findKey(auth, k); i >= 0 {
@@ -236,17 +341,6 @@ func moveCredentials(dir string, root *yaml.Node) (string, error) {
 		return ""
 	}
 	c := Credentials{Username: scalar("username"), PasswordHash: scalar("password_hash")}
-	var created string
-	if c.PasswordHash != "" {
-		switch err := SetupCredentials(dir, c); {
-		case err == nil:
-			created = credentialsPath(dir)
-		case errors.Is(err, ErrAlreadyConfigured):
-			// credentials.yaml wins: it is newer than the legacy hash.
-		default:
-			return "", fmt.Errorf("migrate: %w", err)
-		}
-	}
 	for _, k := range legacyCredentialKeys {
 		if i := findKey(auth, k); i >= 0 {
 			removePair(auth, i)
@@ -255,7 +349,7 @@ func moveCredentials(dir string, root *yaml.Node) (string, error) {
 	if len(auth.Content) == 0 {
 		removePair(root, findKey(root, "auth"))
 	}
-	return created, nil
+	return c
 }
 
 // extractPairs removes the keys named in move from root and returns their

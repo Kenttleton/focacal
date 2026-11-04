@@ -10,7 +10,7 @@ services:
   focacal:
     environment:
       # Point focacal at the in-stack Ollama service instead of host.
-      OLLAMA_BASE_URL: "http://ollama:11434"
+      FOCACAL_AGENT_BASE_URL: "http://ollama:11434/v1"
     depends_on:
       ollama-init:
         condition: service_completed_successfully
