@@ -474,8 +474,14 @@ function focacal() {
 
     async loadConfig() {
       try {
-        const r = await fetch('/config')
-        if (r.ok) this.cfg = await r.json()
+        const r = await fetch('/config/planner')
+        if (!r.ok) return
+        const { values } = await r.json()
+        this.cfg = {
+          working_hours: { ...this.cfg.working_hours, ...(values?.working_hours || {}) },
+          lunch: { ...this.cfg.lunch, ...(values?.lunch || {}) },
+          focus: { ...this.cfg.focus, ...(values?.focus || {}) },
+        }
       } catch (_) {}
     },
 
@@ -634,15 +640,24 @@ function focacal() {
 
     // ── Settings ───────────────────────────────────────────────────────────
     async saveSettings() {
-      const r = await fetch('/config', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(this.cfg),
-      })
-      if (r.ok) {
-        this.showSettings = false
-        this.showToast('Settings saved — takes effect on next replan')
-      } else {
+      // RFC 7396 merge patch: only the sections this panel edits.
+      const { working_hours, lunch, focus } = this.cfg
+      try {
+        const r = await fetch('/config/planner', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/merge-patch+json' },
+          body: JSON.stringify({ working_hours, lunch, focus }),
+        })
+        const body = await r.json().catch(() => ({}))
+        if (r.ok) {
+          this.showSettings = false
+          this.showToast(body.pending_restart
+            ? 'Settings saved — restart focacal to apply'
+            : 'Settings saved')
+        } else {
+          this.showToast('Failed to save settings: ' + (body.error || r.status))
+        }
+      } catch (_) {
         this.showToast('Failed to save settings')
       }
     },

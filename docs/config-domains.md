@@ -37,6 +37,26 @@ the file for the domain it edits, keeping comments and unknown keys, and the
 response says `pending_restart: true` until the process restarts with the new
 values.
 
+### REST API
+
+Each domain has one read and one write, behind the same auth as the rest of
+the API (`GET /openapi.json` has the full schema):
+
+- `GET /config/{domain}` (`app`, `planner`, `calendars`) returns
+  `{"values": {...}, "order": {...}, "pending_restart": false}`. `values` are
+  the file values over the defaults (no environment overrides); collections are
+  objects keyed by id (destinations by `id|calendar_id`) and `order` lists
+  their ids in file order. Secrets are never returned; each source has
+  `has_secret`.
+- `PATCH /config/{domain}` takes a JSON merge patch (RFC 7396): send only what
+  changes, `null` deletes a key or an item, for example
+  `{"working_hours": {"start": "08:30"}}` or
+  `{"sources": {"old-feed": null}}`. It returns the new view.
+  Errors are `{"error": "..."}`: 400 malformed body or unknown key, 404 unknown
+  domain, 413 body over 1 MiB, 422 a value fails validation or a secret was
+  sent inline (nothing is written), 500 a file on disk could not be read or
+  parsed (details in the server log).
+
 ### Secrets
 
 Secrets never go into the domain files through the API:
@@ -86,8 +106,9 @@ generated on first start and printed once.
 - `auth.session_token` was never read. The migration drops it.
 - `ollama:` (in old `config.yaml` files) was never read. The scheduler reads
   `agent:`. It is left in place as an unknown key; delete it when convenient.
-- `display_timezone` is an interim key that will be removed. The client keeps
-  the display time zone; planning uses `working_hours.timezone`.
+- `display_timezone` (in old `planner.yaml` or `config.yaml` files) is no
+  longer read. The display time zone is a client setting; planning uses
+  `working_hours.timezone`. Delete the key when convenient.
 
 ## Migration from a single `config.yaml`
 

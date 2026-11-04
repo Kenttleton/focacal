@@ -218,7 +218,11 @@ func (s *Service) Patch(d Domain, body []byte) (View, error) {
 		files[d] = patched
 		cfg, err := loadFiles(files)
 		if err != nil {
-			return fmt.Errorf("%w: %w", ErrValidation, err)
+			// checkPatch already type-checked the patch, so this is the
+			// content of a file on disk (a hand edit that no longer parses
+			// or decodes). It is not the request's fault and its message may
+			// quote file contents, so it carries no error kind (HTTP 500).
+			return err
 		}
 		if err := d.validate(cfg); err != nil {
 			return fmt.Errorf("%w: %w", ErrValidation, err)

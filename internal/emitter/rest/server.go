@@ -13,7 +13,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -111,18 +110,15 @@ func New(connectors map[string]connector.Connector, health *HealthState, addr st
 	r.Get("/events", s.handleEvents)
 	r.Get("/conflicts", s.handleConflicts)
 	r.Post("/conflicts/{key}/dismiss", s.handleDismissConflict)
-	r.Get("/sources", s.handleSources)
-	r.Get("/destinations", s.handleDestinations)
-	r.Put("/config/sources", s.handlePutSources)
-	r.Put("/config/destinations", s.handlePutDestinations)
 	// Block mutations from the Web UI.
 	r.Post("/blocks", s.handleCreateBlock)
 	r.Patch("/blocks/{id}", s.handleUpdateBlock)
 	r.Delete("/blocks/{id}", s.handleDeleteBlock)
 
-	// Config read/write for the settings panel.
-	r.Get("/config", s.handleGetConfig)
-	r.Patch("/config", s.handleUpdateConfig)
+	// Config: one GET and one PATCH (RFC 7396 merge patch) per domain
+	// (app, planner, calendars). See config_handlers.go.
+	r.Get("/config/{domain}", s.handleGetConfigDomain)
+	r.Patch("/config/{domain}", s.handlePatchConfigDomain)
 
 	// Webcal / ICS feed — next 14 days of events and blocks.
 	// Subscribe in any calendar app with: webcal://host:5233/calendar.ics
@@ -281,152 +277,6 @@ func (s *Server) handleDeleteBlock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
-}
-
-// handleGetConfig returns the subset of config that the settings panel can edit.
-func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
-	uc := config.UserConfigFromContext(r.Context())
-	writeJSON(w, http.StatusOK, map[string]any{
-		"working_hours": map[string]any{
-			"start":    uc.WorkingHours.Start,
-			"end":      uc.WorkingHours.End,
-			"timezone": uc.WorkingHours.Timezone,
-		},
-		"display_timezone": uc.DisplayTimezone,
-		"lunch": map[string]any{
-			"preferred":        uc.Lunch.Preferred,
-			"window_start":     uc.Lunch.WindowStart,
-			"window_end":       uc.Lunch.WindowEnd,
-			"duration_minutes": uc.Lunch.DurationMinutes,
-		},
-		"focus": map[string]any{
-			"style":                  uc.Focus.Style,
-			"min_block_minutes":      uc.Focus.MinBlockMinutes,
-			"max_block_minutes":      uc.Focus.MaxBlockMinutes,
-			"buffer_around_meetings": uc.Focus.BufferAroundMeetings,
-		},
-	})
-}
-
-// handleUpdateConfig writes changed settings back to planner.yaml and
-// updates the in-memory config so GET /config reflects the new values immediately.
-func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
-	var u struct {
-		WorkingHours *struct {
-			Start    string `json:"start"`
-			End      string `json:"end"`
-			Timezone string `json:"timezone"`
-		} `json:"working_hours"`
-		// DisplayTimezone is a pointer so an explicit "" (reset to detect) can
-		// be told apart from "not provided".
-		DisplayTimezone *string `json:"display_timezone"`
-		Lunch           *struct {
-			Preferred       string `json:"preferred"`
-			WindowStart     string `json:"window_start"`
-			WindowEnd       string `json:"window_end"`
-			DurationMinutes int    `json:"duration_minutes"`
-		} `json:"lunch"`
-		Focus *struct {
-			Style                string `json:"style"`
-			MinBlockMinutes      int    `json:"min_block_minutes"`
-			MaxBlockMinutes      int    `json:"max_block_minutes"`
-			BufferAroundMeetings int    `json:"buffer_around_meetings"`
-		} `json:"focus"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&u); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	uc := config.UserConfigFromContext(r.Context())
-
-	if wh := u.WorkingHours; wh != nil {
-		if wh.Start != "" {
-			uc.WorkingHours.Start = wh.Start
-		}
-		if wh.End != "" {
-			uc.WorkingHours.End = wh.End
-		}
-		if wh.Timezone != "" {
-			uc.WorkingHours.Timezone = wh.Timezone
-		}
-	}
-	if u.DisplayTimezone != nil {
-		tz := *u.DisplayTimezone
-		if tz != "" {
-			if _, err := time.LoadLocation(tz); err != nil {
-				writeError(w, http.StatusBadRequest, "unknown timezone: "+tz)
-				return
-			}
-		}
-		uc.DisplayTimezone = tz
-	}
-	if l := u.Lunch; l != nil {
-		if l.Preferred != "" {
-			uc.Lunch.Preferred = l.Preferred
-		}
-		if l.WindowStart != "" {
-			uc.Lunch.WindowStart = l.WindowStart
-		}
-		if l.WindowEnd != "" {
-			uc.Lunch.WindowEnd = l.WindowEnd
-		}
-		if l.DurationMinutes > 0 {
-			uc.Lunch.DurationMinutes = l.DurationMinutes
-		}
-	}
-	if f := u.Focus; f != nil {
-		if f.Style != "" {
-			uc.Focus.Style = f.Style
-		}
-		if f.MinBlockMinutes > 0 {
-			uc.Focus.MinBlockMinutes = f.MinBlockMinutes
-		}
-		if f.MaxBlockMinutes > 0 {
-			uc.Focus.MaxBlockMinutes = f.MaxBlockMinutes
-		}
-		if f.BufferAroundMeetings >= 0 {
-			uc.Focus.BufferAroundMeetings = f.BufferAroundMeetings
-		}
-	}
-
-	// Interim (replaced by the domain handlers): these keys live in planner.yaml.
-	cfgPath := filepath.Join(s.configDir, config.DomainPlanner.File())
-	// Write only the sections this request touched: WriteSections re-encodes each
-	// one, which drops its inline comments, so untouched sections are left alone.
-	sections := map[string]any{}
-	if u.WorkingHours != nil {
-		sections["working_hours"] = map[string]any{
-			"start":    uc.WorkingHours.Start,
-			"end":      uc.WorkingHours.End,
-			"timezone": uc.WorkingHours.Timezone,
-		}
-	}
-	if u.DisplayTimezone != nil {
-		sections["display_timezone"] = uc.DisplayTimezone
-	}
-	if u.Lunch != nil {
-		sections["lunch"] = map[string]any{
-			"preferred":        uc.Lunch.Preferred,
-			"window_start":     uc.Lunch.WindowStart,
-			"window_end":       uc.Lunch.WindowEnd,
-			"duration_minutes": uc.Lunch.DurationMinutes,
-		}
-	}
-	if u.Focus != nil {
-		sections["focus"] = map[string]any{
-			"style":                  uc.Focus.Style,
-			"min_block_minutes":      uc.Focus.MinBlockMinutes,
-			"max_block_minutes":      uc.Focus.MaxBlockMinutes,
-			"buffer_around_meetings": uc.Focus.BufferAroundMeetings,
-		}
-	}
-	if err := config.WriteSections(cfgPath, sections); err != nil {
-		s.log.Warn("write config", "err", err)
-		writeError(w, http.StatusInternalServerError, "could not write planner.yaml: "+err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"status": "saved", "restart_required": true})
 }
 
 // handleWebhookValidation responds to the Outlook/Graph subscription validation
@@ -727,98 +577,6 @@ func (s *Server) handleDismissConflict(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
-}
-
-func (s *Server) handleSources(w http.ResponseWriter, r *http.Request) {
-	uc := config.UserConfigFromContext(r.Context())
-	out := make([]map[string]any, 0, len(uc.Sources))
-	for _, src := range uc.Sources {
-		out = append(out, map[string]any{
-			"id":           src.ID,
-			"label":        src.Label,
-			"type":         src.Type,
-			"calendar_ids": src.EffectiveCalendarIDs(),
-			"conflicts": map[string]bool{
-				"declined":  src.Conflicts.CountsDeclined(),
-				"tentative": src.Conflicts.CountsTentative(),
-				"free":      src.Conflicts.CountsFree(),
-				"all_day":   src.Conflicts.CountsAllDay(),
-			},
-			"ics_url_env": src.ICSURLEnv,
-			"has_secret":  src.Password != "" || src.ICSURL != "",
-		})
-	}
-	writeJSON(w, http.StatusOK, out)
-}
-
-func (s *Server) handleDestinations(w http.ResponseWriter, r *http.Request) {
-	uc := config.UserConfigFromContext(r.Context())
-	writeJSON(w, http.StatusOK, uc.Destinations)
-}
-
-func (s *Server) handlePutSources(w http.ResponseWriter, r *http.Request) {
-	var list []config.SourceConfig
-	if err := json.NewDecoder(r.Body).Decode(&list); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	uc := config.UserConfigFromContext(r.Context())
-	// sentinel handling
-	for i := range list {
-		if list[i].Password == "********" {
-			// find existing
-			for _, old := range uc.Sources {
-				if old.ID == list[i].ID {
-					list[i].Password = old.Password
-					list[i].ICSURL = old.ICSURL
-				}
-			}
-		}
-		if list[i].ICSURL == "********" {
-			for _, old := range uc.Sources {
-				if old.ID == list[i].ID {
-					list[i].ICSURL = old.ICSURL
-				}
-			}
-		}
-	}
-	candidate := *uc
-	candidate.Sources = list
-	cfg := &config.Config{UserConfig: candidate}
-	if err := cfg.Validate(); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	// Interim (replaced by the domain handlers): sources and destinations live in calendars.yaml.
-	path := filepath.Join(s.configDir, config.DomainCalendars.File())
-	if err := config.WriteSections(path, map[string]any{"sources": list}); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"status": "saved", "restart_required": true})
-}
-
-func (s *Server) handlePutDestinations(w http.ResponseWriter, r *http.Request) {
-	var list []config.DestinationConfig
-	if err := json.NewDecoder(r.Body).Decode(&list); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	uc := config.UserConfigFromContext(r.Context())
-	candidate := *uc
-	candidate.Destinations = list
-	cfg := &config.Config{UserConfig: candidate}
-	if err := cfg.Validate(); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	// Interim (replaced by the domain handlers): sources and destinations live in calendars.yaml.
-	path := filepath.Join(s.configDir, config.DomainCalendars.File())
-	if err := config.WriteSections(path, map[string]any{"destinations": list}); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"status": "saved", "restart_required": true})
 }
 
 func parseRange(r *http.Request) (time.Time, time.Time) {
