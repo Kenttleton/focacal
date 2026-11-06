@@ -73,6 +73,9 @@ func (c *Connector) WriteEvent(ctx context.Context, e *connector.RemoteEvent) (s
 		return "", err
 	}
 	if _, err := client.PutCalendarObject(ctx, objectPath, cal); err != nil {
+		if e.RemoteID != "" && isHTTPNotFound(err) {
+			return "", fmt.Errorf("put calendar object: %w", connector.ErrNotFound)
+		}
 		return "", fmt.Errorf("put calendar object: %w", err)
 	}
 	return uid, nil
@@ -101,10 +104,8 @@ func (c *Connector) DeleteEvent(ctx context.Context, remoteID string) error {
 	}
 	// caldav.Client embeds webdav.Client which has RemoveAll.
 	if err := client.RemoveAll(ctx, objectPath); err != nil {
-		// go-webdav's HTTP error type is internal; its text starts with the
-		// status ("404 Not Found"). A missing object is already deleted.
-		if strings.HasPrefix(err.Error(), "404 ") {
-			return nil
+		if isHTTPNotFound(err) {
+			return nil // already gone
 		}
 		return fmt.Errorf("delete calendar object %q: %w", remoteID, err)
 	}
@@ -138,3 +139,10 @@ func (c *Connector) defaultCalendarPath(ctx context.Context) (string, error) {
 	return homeSet, nil
 }
 
+
+// isHTTPNotFound reports an HTTP 404 from go-webdav. Its error type is
+// internal to the library (no exported type to match), and its text starts
+// with the status line ("404 Not Found").
+func isHTTPNotFound(err error) bool {
+	return err != nil && strings.HasPrefix(err.Error(), "404 ")
+}

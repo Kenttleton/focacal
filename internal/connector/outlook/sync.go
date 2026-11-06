@@ -369,6 +369,9 @@ func (c *Connector) WriteEvent(ctx context.Context, e *connector.RemoteEvent) (s
 	}
 
 	if status < 200 || status >= 300 {
+		if err := notFoundOnUpdate(status, e.RemoteID != ""); err != nil {
+			return "", err
+		}
 		if isExpiredRefreshToken(status, respBody) {
 			return "", fmt.Errorf("outlook[%s]: refresh token expired — run 'focacal auth outlook %s'",
 				c.cfg.ID, c.cfg.TokenKey())
@@ -458,4 +461,13 @@ func syncKey(sourceID, calendarID string) string {
 		calendarID = "primary"
 	}
 	return sourceID + ":" + calendarID
+}
+
+// notFoundOnUpdate returns an error wrapping connector.ErrNotFound when an
+// update (non-empty remote id) got a 404, and nil otherwise.
+func notFoundOnUpdate(status int, update bool) error {
+	if update && status == http.StatusNotFound {
+		return fmt.Errorf("write event %d: %w", status, connector.ErrNotFound)
+	}
+	return nil
 }

@@ -2,6 +2,7 @@ package caldav
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -112,5 +113,41 @@ func TestWriteEventIDIsWhatSyncStores(t *testing.T) {
 	}
 	if len(deleted) != 1 || !strings.HasSuffix(deleted[0], ".ics") || len(objects) != 0 {
 		t.Fatalf("delete went to %v", deleted)
+	}
+}
+
+// A 404 from the server maps to ErrNotFound on update and to success on delete.
+func TestCalDAVNotFoundMapping(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/xml; charset=utf-8")
+		switch {
+		case r.Method == http.MethodPut || r.Method == http.MethodDelete:
+			w.WriteHeader(http.StatusNotFound)
+		case strings.Contains(string(body), "current-user-principal"):
+			w.WriteHeader(http.StatusMultiStatus)
+			io.WriteString(w, msHead+propResp(r.URL.Path, `<D:current-user-principal><D:href>/principal/</D:href></D:current-user-principal>`)+`</D:multistatus>`)
+		default:
+			w.WriteHeader(http.StatusMultiStatus)
+			io.WriteString(w, msHead+propResp(r.URL.Path, `<C:calendar-home-set><D:href>/home/</D:href></C:calendar-home-set>`)+`</D:multistatus>`)
+		}
+	}))
+	defer srv.Close()
+	db, err := store.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	c, _ := New(config.SourceConfig{ID: "w", Type: "caldav", CalDAVURL: srv.URL, CalendarIDs: []string{"a"}}, db)
+	now := time.Now()
+	_, err = c.WriteEvent(context.Background(), &connector.RemoteEvent{RemoteID: "gone@focacal", Title: "x", Start: now, End: now.Add(time.Hour)})
+	if !errors.Is(err, connector.ErrNotFound) {
+		t.Fatalf("update 404: %v", err)
+	}
+	if err := c.DeleteEvent(context.Background(), "gone@focacal"); err != nil {
+		t.Fatalf("delete 404 should succeed: %v", err)
+	}
+	if !isHTTPNotFound(errors.New("404 Not Found")) || isHTTPNotFound(errors.New("500 x")) || isHTTPNotFound(nil) {
+		t.Error("isHTTPNotFound wrong")
 	}
 }

@@ -2,10 +2,15 @@ package connector
 
 import (
 	"context"
+	"errors"
 
 	"github.com/Kenttleton/focacal/internal/config"
 	"github.com/Kenttleton/focacal/internal/store"
 )
+
+// ErrNotFound is wrapped by WriteEvent when an update targets a remote event
+// that no longer exists, so the caller can create it anew.
+var ErrNotFound = errors.New("remote event not found")
 
 // Connector is implemented by each calendar provider (Google, Outlook, …).
 type Connector interface {

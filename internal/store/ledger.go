@@ -21,8 +21,17 @@ type LedgerEntry struct {
 	DestinationID string
 	ItemKey       string
 	Hash          string
-	WrittenAt     time.Time
+	// HashTrunc is the hash with the body cut to BodyPreviewRunes, for
+	// providers that store only a body preview (Outlook).
+	HashTrunc string
+	// EndsAt is the written event's end; it decides when a missing item is
+	// deleted remotely and when the row is forgotten.
+	EndsAt    time.Time
+	WrittenAt time.Time
 }
+
+// BodyPreviewRunes is the preview length some providers keep of a body.
+const BodyPreviewRunes = 255
 
 var (
 	tagRe   = regexp.MustCompile(`(?s)<[^>]*>`)
@@ -35,13 +44,30 @@ var (
 // entities decoded, whitespace collapsed); start and end in UTC at second
 // precision.
 func FieldHash(title, body string, start, end time.Time) string {
+	return fieldHash(title, plainText(body), start, end)
+}
+
+// FieldHashTrunc is FieldHash over the plain-text body cut to
+// BodyPreviewRunes runes.
+func FieldHashTrunc(title, body string, start, end time.Time) string {
+	r := []rune(plainText(body))
+	if len(r) > BodyPreviewRunes {
+		r = r[:BodyPreviewRunes]
+	}
+	return fieldHash(title, string(r), start, end)
+}
+
+func plainText(body string) string {
 	body = breakRe.ReplaceAllString(body, " ")
 	body = tagRe.ReplaceAllString(body, "")
-	body = html.UnescapeString(body)
+	return strings.Join(strings.Fields(html.UnescapeString(body)), " ")
+}
+
+func fieldHash(title, plain string, start, end time.Time) string {
 	h := sha256.New()
 	for _, part := range []string{
 		strings.Join(strings.Fields(title), " "),
-		strings.Join(strings.Fields(body), " "),
+		strings.Join(strings.Fields(plain), " "),
 		start.UTC().Truncate(time.Second).Format(time.RFC3339),
 		end.UTC().Truncate(time.Second).Format(time.RFC3339),
 	} {
@@ -65,6 +91,20 @@ func (db *DB) LedgerGet(ctx context.Context, calendarID, remoteID string) (hash 
 	return hash, true, nil
 }
 
+// LedgerHashes returns both hashes recorded for a remote event.
+func (db *DB) LedgerHashes(ctx context.Context, calendarID, remoteID string) (hash, hashTrunc string, ok bool, err error) {
+	err = db.QueryRowContext(ctx,
+		`SELECT hash, hash_trunc FROM write_ledger WHERE calendar_id = ? AND remote_id = ?`,
+		calendarID, remoteID).Scan(&hash, &hashTrunc)
+	if err == sql.ErrNoRows {
+		return "", "", false, nil
+	}
+	if err != nil {
+		return "", "", false, err
+	}
+	return hash, hashTrunc, true, nil
+}
+
 // LedgerPut records a write. It replaces any row with the same (calendar,
 // remote id) or the same (destination, item key).
 func (db *DB) LedgerPut(ctx context.Context, e LedgerEntry) error {
@@ -73,9 +113,9 @@ func (db *DB) LedgerPut(ctx context.Context, e LedgerEntry) error {
 	}
 	_, err := db.ExecContext(ctx, `
 INSERT OR REPLACE INTO write_ledger
-	(calendar_id, remote_id, destination_id, item_key, hash, written_at)
-VALUES (?,?,?,?,?,?)`,
-		e.CalendarID, e.RemoteID, e.DestinationID, e.ItemKey, e.Hash, e.WrittenAt.UTC())
+	(calendar_id, remote_id, destination_id, item_key, hash, hash_trunc, ends_at, written_at)
+VALUES (?,?,?,?,?,?,?,?)`,
+		e.CalendarID, e.RemoteID, e.DestinationID, e.ItemKey, e.Hash, e.HashTrunc, e.EndsAt.UTC(), e.WrittenAt.UTC())
 	return err
 }
 
@@ -89,7 +129,7 @@ func (db *DB) LedgerDelete(ctx context.Context, calendarID, remoteID string) err
 // LedgerByDestination lists every ledger row a destination wrote.
 func (db *DB) LedgerByDestination(ctx context.Context, destinationID string) ([]LedgerEntry, error) {
 	rows, err := db.QueryContext(ctx, `
-SELECT calendar_id, remote_id, destination_id, item_key, hash, written_at
+SELECT calendar_id, remote_id, destination_id, item_key, hash, hash_trunc, ends_at, written_at
 FROM write_ledger WHERE destination_id = ? ORDER BY item_key`, destinationID)
 	if err != nil {
 		return nil, err
@@ -98,7 +138,7 @@ FROM write_ledger WHERE destination_id = ? ORDER BY item_key`, destinationID)
 	var out []LedgerEntry
 	for rows.Next() {
 		var e LedgerEntry
-		if err := rows.Scan(&e.CalendarID, &e.RemoteID, &e.DestinationID, &e.ItemKey, &e.Hash, &e.WrittenAt); err != nil {
+		if err := rows.Scan(&e.CalendarID, &e.RemoteID, &e.DestinationID, &e.ItemKey, &e.Hash, &e.HashTrunc, &e.EndsAt, &e.WrittenAt); err != nil {
 			return nil, err
 		}
 		out = append(out, e)

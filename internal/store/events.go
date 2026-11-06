@@ -49,10 +49,13 @@ const eventColumns = `id, source_id, calendar_id, uid, ical_uid, title, descript
 // stored under its id is removed. A different hash is a real remote edit and
 // is stored normally (the next push refreshes the ledger).
 func (db *DB) UpsertEvent(ctx context.Context, e *Event) error {
-	if want, ok, err := db.LedgerGet(ctx, e.SourceID, e.UID); err != nil {
+	if want, wantTrunc, ok, err := db.LedgerHashes(ctx, e.SourceID, e.UID); err != nil {
 		return err
-	} else if ok && want == FieldHash(e.Title, e.Description, e.Start, e.End) {
-		return db.DeleteEvent(ctx, e.ID)
+	} else if ok {
+		got := FieldHash(e.Title, e.Description, e.Start, e.End)
+		if got == want || (wantTrunc != "" && got == wantTrunc) {
+			return db.DeleteEvent(ctx, e.ID)
+		}
 	}
 	const q = `
 INSERT INTO events

@@ -149,8 +149,8 @@ func (c *Connector) WriteEvent(ctx context.Context, e *connector.RemoteEvent) (s
 		return "", err
 	}
 
-	if status < 200 || status >= 300 {
-		return "", fmt.Errorf("write event API %d: %s", status, respBody)
+	if err := writeError(status, e.RemoteID != "", respBody); err != nil {
+		return "", err
 	}
 
 	var result struct {
@@ -192,4 +192,17 @@ func (c *Connector) DeleteEvent(ctx context.Context, remoteID string) error {
 		return fmt.Errorf("delete event API %d", status)
 	}
 	return nil
+}
+
+// writeError maps a write response status to an error: nil on success, an
+// error wrapping connector.ErrNotFound when an update hit a missing event.
+func writeError(status int, update bool, body []byte) error {
+	switch {
+	case status >= 200 && status < 300:
+		return nil
+	case update && status == http.StatusNotFound:
+		return fmt.Errorf("write event API %d: %w", status, connector.ErrNotFound)
+	default:
+		return fmt.Errorf("write event API %d: %s", status, body)
+	}
 }

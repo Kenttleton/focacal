@@ -2,6 +2,7 @@ package destination
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -35,6 +36,7 @@ type Pusher struct {
 
 	mu    sync.Mutex
 	locks map[string]*sync.Mutex // per destination id
+	fps   map[string]string      // last pushed config fingerprint per destination
 }
 
 // NewPusher builds a Pusher. lockSource takes the per-calendar lock the
@@ -46,7 +48,7 @@ func NewPusher(live *config.Live, lookup ConnectorLookup, lockSource func(calend
 		log = slog.New(slog.DiscardHandler)
 	}
 	return &Pusher{live: live, lookup: lookup, lockSource: lockSource, db: db, log: log,
-		now: time.Now, locks: map[string]*sync.Mutex{}}
+		now: time.Now, locks: map[string]*sync.Mutex{}, fps: map[string]string{}}
 }
 
 func (p *Pusher) destLock(id string) *sync.Mutex {
@@ -60,38 +62,24 @@ func (p *Pusher) destLock(id string) *sync.Mutex {
 	return m
 }
 
-// Notify pushes every calendar-target destination from one config snapshot.
-// A destination that fails does not stop the others; the returned error names
-// only the failed destination ids.
+// Notify pushes every calendar-target destination. A destination that fails
+// does not stop the others; the returned error names only the failed
+// destination ids. Each destination reads its own config snapshot, events and
+// blocks under its lock, so a push that waited for an earlier one never
+// writes stale data.
 func (p *Pusher) Notify(ctx context.Context) error {
-	cfg := p.live.Current()
-	var targets []config.DestinationConfig
-	for _, d := range cfg.Destinations {
+	var ids []string
+	for _, d := range p.live.Current().Destinations {
 		if d.Target.Calendar != "" {
-			targets = append(targets, d)
+			ids = append(ids, d.ID)
 		}
 	}
-	if len(targets) == 0 {
-		return nil
-	}
-
-	now := p.now()
-	from, to := now.Add(-pushBack), now.Add(pushForward)
-	events, err := p.db.ListEvents(ctx, from, to)
-	if err != nil {
-		return fmt.Errorf("list events: %w", err)
-	}
-	blocks, err := p.db.ListBlocks(ctx, from, to)
-	if err != nil {
-		return fmt.Errorf("list blocks: %w", err)
-	}
-
 	var errs []error
-	for _, d := range targets {
-		if err := p.pushOne(ctx, cfg, d, events, blocks); err != nil {
+	for _, id := range ids {
+		if err := p.pushOne(ctx, id); err != nil {
 			// Provider errors can embed URLs or secrets: log the id only.
-			p.log.Warn("push destination failed", "destination", d.ID)
-			errs = append(errs, fmt.Errorf("destination %s", d.ID))
+			p.log.Warn("push destination failed", "destination", id)
+			errs = append(errs, fmt.Errorf("destination %s", id))
 		}
 	}
 	return errors.Join(errs...)
@@ -99,22 +87,68 @@ func (p *Pusher) Notify(ctx context.Context) error {
 
 // item is one remote event a destination should hold.
 type item struct {
-	key  string
-	ev   connector.RemoteEvent
-	hash string
+	key       string
+	ev        connector.RemoteEvent
+	hash      string
+	hashTrunc string
+	endsAt    time.Time
 }
 
-func (p *Pusher) pushOne(ctx context.Context, cfg *config.Config, d config.DestinationConfig, events []*store.Event, blocks []*store.Block) (err error) {
+// Mass-delete guard (ruling 14) and history retention (ruling 13).
+const (
+	maxRemovalsUnchecked = 5
+	forgetAfter          = 30 * 24 * time.Hour
+	ledgerTimeout        = 10 * time.Second
+)
+
+// blockKey is the content-derived item key of a planner block: the planner
+// gives blocks fresh ids every replan, which must not churn remote events.
+func blockKey(b *store.Block) string {
+	const f = time.RFC3339
+	return "block:" + string(b.Type) + ":" + b.Start.UTC().Format(f) + ":" + b.End.UTC().Format(f)
+}
+
+// fingerprint identifies the parts of a destination's config that decide what
+// it publishes and where.
+func fingerprint(cfg *config.Config, d config.DestinationConfig) string {
+	b, _ := json.Marshal(struct {
+		Inputs []config.DestinationInput
+		Target config.DestinationTarget
+	}{cfg.ExpandInputs(d), d.Target})
+	return string(b)
+}
+
+func (p *Pusher) pushOne(ctx context.Context, id string) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = errors.New("panic")
 		}
 	}()
-	target := d.Target.Calendar
 
-	l := p.destLock(d.ID)
+	l := p.destLock(id)
 	l.Lock()
 	defer l.Unlock()
+
+	// Everything below is read under the lock.
+	cfg := p.live.Current()
+	var d config.DestinationConfig
+	found := false
+	for _, x := range cfg.Destinations {
+		if x.ID == id && x.Target.Calendar != "" {
+			d, found = x, true
+		}
+	}
+	if !found {
+		return nil // removed or retargeted to a served feed since Notify began
+	}
+	target := d.Target.Calendar
+
+	fp := fingerprint(cfg, d)
+	p.mu.Lock()
+	prevFP, seen := p.fps[id]
+	p.fps[id] = fp
+	p.mu.Unlock()
+	configChanged := seen && prevFP != fp
 
 	if !writableTarget(cfg, target) {
 		return errors.New("target not writable")
@@ -127,18 +161,38 @@ func (p *Pusher) pushOne(ctx context.Context, cfg *config.Config, d config.Desti
 		return errors.New("no connector")
 	}
 
+	now := p.now()
+	winStart, winEnd := now.Add(-pushBack), now.Add(pushForward)
+	events, err := p.db.ListEvents(ctx, winStart, winEnd)
+	if err != nil {
+		return err
+	}
+	blocks, err := p.db.ListBlocks(ctx, winStart, winEnd)
+	if err != nil {
+		return err
+	}
+
 	pe, pb := Project(cfg, d, events, blocks)
 	var items []item
+	seenKey := map[string]bool{}
+	add := func(it item) {
+		if !seenKey[it.key] {
+			seenKey[it.key] = true
+			items = append(items, it)
+		}
+	}
 	for _, e := range pe {
 		if e.AllDay { // ruling 11: RemoteEvent carries only times
 			continue
 		}
-		items = append(items, item{key: e.ID, hash: store.FieldHash(e.Title, e.Description, e.Start, e.End),
+		add(item{key: e.ID, hash: store.FieldHash(e.Title, e.Description, e.Start, e.End),
+			hashTrunc: store.FieldHashTrunc(e.Title, e.Description, e.Start, e.End), endsAt: e.End,
 			ev: connector.RemoteEvent{Title: e.Title, Description: e.Description, Location: e.Location,
 				Start: e.Start, End: e.End, ShowAs: "busy", ManagedTag: true}})
 	}
 	for _, b := range pb {
-		items = append(items, item{key: b.ID, hash: store.FieldHash(b.Title, "", b.Start, b.End),
+		add(item{key: blockKey(b), hash: store.FieldHash(b.Title, "", b.Start, b.End),
+			hashTrunc: store.FieldHashTrunc(b.Title, "", b.Start, b.End), endsAt: b.End,
 			ev: connector.RemoteEvent{Title: b.Title, Start: b.Start, End: b.End, ShowAs: "busy", ManagedTag: true}})
 	}
 
@@ -152,12 +206,23 @@ func (p *Pusher) pushOne(ctx context.Context, cfg *config.Config, d config.Desti
 	}
 
 	failed := false
+	// Ledger changes after a remote change must survive an expired parent
+	// context, or the remote event would be left untracked.
+	record := func(f func(context.Context) error) {
+		c, cancel := context.WithTimeout(context.WithoutCancel(ctx), ledgerTimeout)
+		defer cancel()
+		if err := f(c); err != nil {
+			p.log.Warn("ledger update failed", "destination", d.ID)
+			failed = true
+		}
+	}
+
 	wanted := make(map[string]bool, len(items))
 	for _, it := range items {
 		wanted[it.key] = true
 		prev, had := byKey[it.key]
 		if had && prev.CalendarID != target {
-			had = false // written to an earlier target; stale rows are removed below
+			had = false // written to an earlier target; stale rows are handled below
 		}
 		if had && prev.Hash == it.hash {
 			continue // unchanged: idempotent
@@ -167,26 +232,56 @@ func (p *Pusher) pushOne(ctx context.Context, cfg *config.Config, d config.Desti
 			ev.RemoteID = prev.RemoteID
 		}
 		remoteID, werr := conn.WriteEvent(ctx, &ev)
+		if had && errors.Is(werr, connector.ErrNotFound) {
+			// The remote event is gone: drop the stale row, create anew.
+			record(func(c context.Context) error { return p.db.LedgerDelete(c, prev.CalendarID, prev.RemoteID) })
+			ev.RemoteID = ""
+			remoteID, werr = conn.WriteEvent(ctx, &ev)
+		}
 		if werr != nil {
 			failed = true
 			continue
 		}
-		if perr := p.db.LedgerPut(ctx, store.LedgerEntry{CalendarID: target, RemoteID: remoteID,
-			DestinationID: d.ID, ItemKey: it.key, Hash: it.hash, WrittenAt: p.now()}); perr != nil {
-			failed = true
-		}
+		record(func(c context.Context) error {
+			return p.db.LedgerPut(c, store.LedgerEntry{CalendarID: target, RemoteID: remoteID,
+				DestinationID: d.ID, ItemKey: it.key, Hash: it.hash, HashTrunc: it.hashTrunc,
+				EndsAt: it.endsAt, WrittenAt: p.now()})
+		})
 	}
 
+	// Ledger rows the projection no longer produces. One that ended before
+	// the window is history, not a removal: it stays on the remote (and keeps
+	// suppressing its echo) until it is 30 days old, then is forgotten with
+	// no remote delete.
+	var removals []store.LedgerEntry
+	inWindow := 0
 	for _, le := range ledger {
+		if !le.EndsAt.IsZero() && le.EndsAt.Before(winStart) {
+			if le.EndsAt.Before(now.Add(-forgetAfter)) {
+				le := le
+				record(func(c context.Context) error { return p.db.LedgerDelete(c, le.CalendarID, le.RemoteID) })
+			}
+			continue
+		}
+		inWindow++
 		if le.CalendarID == target && wanted[le.ItemKey] {
 			continue
 		}
+		removals = append(removals, le)
+	}
+	if len(removals) > maxRemovalsUnchecked && len(removals)*2 > inWindow && !configChanged {
+		p.log.Warn("push skipped deletes: too many removals at once", "destination", d.ID)
+		removals = nil
+		failed = true
+	}
+	for _, le := range removals {
 		c := conn
 		if le.CalendarID != target {
 			var ok bool
 			if c, ok = p.lookup(le.CalendarID); !ok {
 				// The old target is gone; nothing remote to delete.
-				_ = p.db.LedgerDelete(ctx, le.CalendarID, le.RemoteID)
+				le := le
+				record(func(cc context.Context) error { return p.db.LedgerDelete(cc, le.CalendarID, le.RemoteID) })
 				continue
 			}
 		}
@@ -194,9 +289,8 @@ func (p *Pusher) pushOne(ctx context.Context, cfg *config.Config, d config.Desti
 			failed = true
 			continue
 		}
-		if lerr := p.db.LedgerDelete(ctx, le.CalendarID, le.RemoteID); lerr != nil {
-			failed = true
-		}
+		le := le
+		record(func(cc context.Context) error { return p.db.LedgerDelete(cc, le.CalendarID, le.RemoteID) })
 	}
 	if failed {
 		return errors.New("some writes failed")

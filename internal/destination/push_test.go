@@ -29,6 +29,9 @@ type fakeConn struct {
 	dels   []string
 	failW  bool
 	seq    int
+
+	updateGone bool   // updates fail with ErrNotFound (remote event deleted)
+	afterWrite func() // runs after a successful write, before it returns
 }
 
 func newFake(id string) *fakeConn {
@@ -47,6 +50,10 @@ func (f *fakeConn) WriteEvent(_ context.Context, e *connector.RemoteEvent) (stri
 	if f.failW {
 		return "", errors.New("boom https://secret.test/?token=hunter2")
 	}
+	if e.RemoteID != "" && f.updateGone {
+		delete(f.remote, e.RemoteID)
+		return "", fmt.Errorf("gone: %w", connector.ErrNotFound)
+	}
 	f.writes = append(f.writes, *e)
 	id := e.RemoteID
 	if id == "" {
@@ -54,6 +61,13 @@ func (f *fakeConn) WriteEvent(_ context.Context, e *connector.RemoteEvent) (stri
 		id = fmt.Sprintf("%s-r%d", f.id, f.seq)
 	}
 	f.remote[id] = *e
+	if f.afterWrite != nil {
+		hook := f.afterWrite
+		f.afterWrite = nil
+		f.mu.Unlock()
+		hook()
+		f.mu.Lock()
+	}
 	return id, nil
 }
 func (f *fakeConn) DeleteEvent(_ context.Context, id string) error {
@@ -88,6 +102,7 @@ type env struct {
 	p     *Pusher
 	logs  *bytes.Buffer
 	now   time.Time
+	dir   string
 }
 
 func newEnv(t *testing.T, yamlText string, calIDs ...string) *env {
@@ -105,7 +120,7 @@ func newEnv(t *testing.T, yamlText string, calIDs ...string) *env {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
-	e := &env{db: db, live: live, conns: map[string]*fakeConn{}, logs: &bytes.Buffer{}, now: time.Now().Truncate(time.Second)}
+	e := &env{dir: dir, db: db, live: live, conns: map[string]*fakeConn{}, logs: &bytes.Buffer{}, now: time.Now().Truncate(time.Second)}
 	for _, id := range calIDs {
 		e.conns[id] = newFake(id)
 	}
@@ -167,7 +182,7 @@ func TestPusherWritesAndUpdates(t *testing.T) {
     target: {calendar: work}
 `, "work")
 	ctx := context.Background()
-	e.block(t, "b1", "Focus", 2*time.Hour)
+	b1 := e.block(t, "b1", "Focus", 2*time.Hour)
 	e.block(t, "b2", "Focus 2", 5*time.Hour)
 
 	if err := e.p.Notify(ctx); err != nil {
@@ -193,7 +208,7 @@ func TestPusherWritesAndUpdates(t *testing.T) {
 	led, _ := e.db.LedgerByDestination(ctx, "out")
 	var rid string
 	for _, l := range led {
-		if l.ItemKey == "b1" {
+		if l.ItemKey == blockKey(b1) {
 			rid = l.RemoteID
 		}
 	}
@@ -392,5 +407,248 @@ func TestPusherSerializesPerDestination(t *testing.T) {
 	wg.Wait()
 	if n := len(e.conns["work"].writes); n != 1 {
 		t.Fatalf("concurrent notifies wrote %d times, want 1", n)
+	}
+}
+
+func (e *env) rewriteConfig(t *testing.T, body string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(e.dir, "calendars.yaml"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.live.Reload(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (e *env) count(t *testing.T) int {
+	t.Helper()
+	l, _ := e.db.LedgerByDestination(context.Background(), "out")
+	return len(l)
+}
+
+const outFocacal = `  - id: out
+    inputs: [{calendar: focacal}]
+    target: {calendar: work}
+`
+
+// Ruling 13: history stays on the remote and keeps suppressing its echo.
+func TestPusherKeepsAgedOutHistory(t *testing.T) {
+	e := newEnv(t, baseCfg+outFocacal, "work")
+	ctx := context.Background()
+	e.block(t, "b1", "Focus", 2*time.Hour)
+	if err := e.p.Notify(ctx); err != nil {
+		t.Fatal(err)
+	}
+	w := e.conns["work"]
+	e.now = e.now.Add(8 * 24 * time.Hour) // the block is now before the window
+	if err := e.p.Notify(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(w.dels) != 0 || len(w.remote) != 1 || e.count(t) != 1 {
+		t.Fatalf("history deleted: dels=%v remote=%d ledger=%d", w.dels, len(w.remote), e.count(t))
+	}
+	w.echo(t, e.db)
+	if evs, _ := e.db.ListEvents(ctx, e.now.Add(-30*24*time.Hour), e.now); len(evs) != 0 {
+		t.Fatalf("history echo not suppressed: %+v", evs)
+	}
+	e.now = e.now.Add(26 * 24 * time.Hour) // more than 30 days after it ended
+	if err := e.p.Notify(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(w.dels) != 0 || len(w.remote) != 1 {
+		t.Fatalf("forgetting must not delete remotely: dels=%v", w.dels)
+	}
+	if e.count(t) != 0 {
+		t.Fatal("ledger row not forgotten after 30 days")
+	}
+}
+
+func TestPusherMassDeleteGuard(t *testing.T) {
+	e := newEnv(t, baseCfg+outFocacal, "work")
+	ctx := context.Background()
+	for i := 0; i < 8; i++ {
+		e.block(t, fmt.Sprintf("b%d", i), "Focus", time.Duration(i+1)*2*time.Hour)
+	}
+	if err := e.p.Notify(ctx); err != nil {
+		t.Fatal(err)
+	}
+	w := e.conns["work"]
+	// Under the cap: removing 3 of 8 proceeds.
+	for i := 0; i < 3; i++ {
+		_ = e.db.DeleteBlock(ctx, fmt.Sprintf("b%d", i))
+	}
+	if err := e.p.Notify(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(w.dels) != 3 {
+		t.Fatalf("small removal: dels=%d, want 3", len(w.dels))
+	}
+	// Everything gone: 5 of 5 is not over 5 removals; add one more block first.
+	e.block(t, "extra", "Focus", 20*time.Hour)
+	if err := e.p.Notify(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for i := 3; i < 8; i++ {
+		_ = e.db.DeleteBlock(ctx, fmt.Sprintf("b%d", i))
+	}
+	_ = e.db.DeleteBlock(ctx, "extra")
+	// 6 removals, all of the ledger: guarded, in this pusher and in a fresh
+	// one (first push after a process start counts as unchanged).
+	before := len(w.dels)
+	for _, p := range []*Pusher{e.p, NewPusher(e.live, e.p.lookup, nil, e.db, e.p.log)} {
+		p.now = e.p.now
+		if err := p.Notify(ctx); err == nil {
+			t.Fatal("a guarded push should report failure")
+		}
+		if len(w.dels) != before || e.count(t) != 6 {
+			t.Fatalf("mass delete not blocked: dels=%d ledger=%d", len(w.dels)-before, e.count(t))
+		}
+	}
+	if !strings.Contains(e.logs.String(), "destination=out") {
+		t.Errorf("guard not logged by id: %s", e.logs.String())
+	}
+	// A config change since the previous push allows the same deletes.
+	e.rewriteConfig(t, baseCfg+`  - id: out
+    inputs: [{calendar: feed}]
+    target: {calendar: work}
+`)
+	if err := e.p.Notify(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(w.dels) != before+6 || e.count(t) != 0 {
+		t.Fatalf("config change should allow deletes: dels=%d ledger=%d", len(w.dels)-before, e.count(t))
+	}
+}
+
+func TestPusherRecreatesAfterRemoteDeletion(t *testing.T) {
+	e := newEnv(t, baseCfg+outFocacal, "work")
+	ctx := context.Background()
+	e.block(t, "b1", "Focus", time.Hour)
+	if err := e.p.Notify(ctx); err != nil {
+		t.Fatal(err)
+	}
+	w := e.conns["work"]
+	old, _ := e.db.LedgerByDestination(ctx, "out")
+	w.updateGone = true
+	e.block(t, "b1", "Focus v2", time.Hour)
+	if err := e.p.Notify(ctx); err != nil {
+		t.Fatal(err)
+	}
+	led, _ := e.db.LedgerByDestination(ctx, "out")
+	last := w.writes[len(w.writes)-1]
+	if len(led) != 1 || led[0].RemoteID == old[0].RemoteID || last.RemoteID != "" || last.Title != "Focus v2" {
+		t.Fatalf("not recreated: ledger=%+v last=%+v", led, last)
+	}
+}
+
+// Ruling 16: a push that waited for another must write current data.
+func TestPusherReadsDataUnderTheLock(t *testing.T) {
+	e := newEnv(t, baseCfg+outFocacal, "work")
+	ctx := context.Background()
+	e.block(t, "b1", "old", time.Hour)
+	w := e.conns["work"]
+	entered, release := make(chan struct{}), make(chan struct{})
+	w.afterWrite = func() { close(entered); <-release }
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); _ = e.p.Notify(ctx) }()
+	<-entered
+	go func() { defer wg.Done(); _ = e.p.Notify(ctx) }()
+	time.Sleep(150 * time.Millisecond) // the second Notify is now waiting for the first
+	e.block(t, "b1", "new", time.Hour)
+	close(release)
+	wg.Wait()
+	led, _ := e.db.LedgerByDestination(ctx, "out")
+	if len(led) != 1 || len(w.remote) != 1 {
+		t.Fatalf("ledger=%d remote=%d", len(led), len(w.remote))
+	}
+	for _, r := range w.remote {
+		if r.Title != "new" {
+			t.Fatalf("remote holds stale %q", r.Title)
+		}
+	}
+	b := e.block(t, "tmp", "new", time.Hour)
+	_ = e.db.DeleteBlock(ctx, "tmp")
+	if led[0].Hash != store.FieldHash("new", "", b.Start, b.End) {
+		t.Fatal("ledger hash is not the newer data's")
+	}
+}
+
+// Ruling 17: an expired parent context must not leave an untracked write.
+func TestLedgerWrittenAfterParentContextCancelled(t *testing.T) {
+	e := newEnv(t, baseCfg+outFocacal, "work")
+	ctx, cancel := context.WithCancel(context.Background())
+	e.conns["work"].afterWrite = cancel
+	e.block(t, "b1", "Focus", time.Hour)
+	_ = e.p.Notify(ctx)
+	if e.count(t) != 1 {
+		t.Fatal("remote event written but not recorded in the ledger")
+	}
+}
+
+// Ruling 18a: providers that keep only a body preview still match.
+func TestTruncatedBodyEchoIsSuppressed(t *testing.T) {
+	e := newEnv(t, baseCfg+`  - id: out
+    inputs: [{calendar: feed}]
+    target: {calendar: work}
+`, "work")
+	ctx := context.Background()
+	body := strings.Repeat("abcdefghij", 40) // 400 chars
+	s := e.now.Add(time.Hour)
+	if err := e.db.UpsertEvent(ctx, &store.Event{ID: "feed:primary:m", SourceID: "feed", UID: "m", Title: "Long",
+		Description: body, Start: s, End: s.Add(time.Hour), Status: "confirmed"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.p.Notify(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var rid string
+	for id := range e.conns["work"].remote {
+		rid = id
+	}
+	echo := func(title, desc string) {
+		_ = e.db.UpsertEvent(ctx, &store.Event{ID: store.EventID("work", "primary", rid), SourceID: "work", UID: rid,
+			Title: title, Description: desc, Start: s, End: s.Add(time.Hour), Status: "confirmed"})
+	}
+	list := func() int {
+		evs, _ := e.db.ListEvents(ctx, e.now.Add(-time.Hour), e.now.Add(48*time.Hour))
+		n := 0
+		for _, x := range evs {
+			if x.SourceID == "work" {
+				n++
+			}
+		}
+		return n
+	}
+	echo("Long", body[:255])
+	if list() != 0 {
+		t.Fatal("preview-truncated echo was ingested")
+	}
+	echo("Long (edited by me)", body[:255])
+	if list() != 1 {
+		t.Fatal("genuine remote edit was not ingested")
+	}
+}
+
+// Ruling 18b: replans regenerate block ids; identical content must not churn.
+func TestReplanWithNewBlockIDsDoesNotChurn(t *testing.T) {
+	e := newEnv(t, baseCfg+outFocacal, "work")
+	ctx := context.Background()
+	for i := 0; i < 3; i++ {
+		e.block(t, fmt.Sprintf("old%d", i), "Focus", time.Duration(i+1)*3*time.Hour)
+	}
+	if err := e.p.Notify(ctx); err != nil {
+		t.Fatal(err)
+	}
+	w := e.conns["work"]
+	for i := 0; i < 3; i++ {
+		_ = e.db.DeleteBlock(ctx, fmt.Sprintf("old%d", i))
+		e.block(t, fmt.Sprintf("new%d", i), "Focus", time.Duration(i+1)*3*time.Hour)
+	}
+	if err := e.p.Notify(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(w.writes) != 3 || len(w.dels) != 0 {
+		t.Fatalf("churn: writes=%d dels=%d", len(w.writes), len(w.dels))
 	}
 }

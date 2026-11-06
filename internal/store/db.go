@@ -96,6 +96,8 @@ CREATE TABLE IF NOT EXISTS write_ledger (
 	destination_id TEXT NOT NULL,
 	item_key       TEXT NOT NULL,
 	hash           TEXT NOT NULL,
+	hash_trunc     TEXT NOT NULL DEFAULT '',
+	ends_at        DATETIME NOT NULL,
 	written_at     DATETIME NOT NULL,
 	PRIMARY KEY (calendar_id, remote_id),
 	UNIQUE (destination_id, item_key)
