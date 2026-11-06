@@ -81,7 +81,7 @@ var plugin = await kernel.ImportPluginFromOpenApiAsync(
 | `getConfigDomain` | GET | `/config/{domain}` | Read one config domain (`app`, `planner`, `calendars`) |
 | `patchConfigDomain` | PATCH | `/config/{domain}` | Merge-patch one domain, e.g. working hours or focus style |
 | `getHealth` | GET | `/health` | Service status and sync state |
-| `getCalendarFeed` | GET | `/calendar.ics` | Subscribe via webcal |
+| `getCalendarFeed` | GET | `/calendar.ics` | Subscribe via webcal. Serves every event with no destination filtering (same global auth as `/events`), so destination visibility settings do not apply |
 
 ## Remote access and security
 

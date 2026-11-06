@@ -172,7 +172,7 @@ All commands run inside the container via the `focacal.sh` wrapper:
 1. Go to [Azure App Registrations](https://portal.azure.com/#blade/Microsoft_AAD_RegisteredApps)
 2. New registration → Accounts in any organizational directory + personal Microsoft accounts
 3. Add redirect URI (Web): `http://localhost:8080/oauth/callback/outlook`
-4. API permissions → Add `Calendars.Read` (and `Calendars.ReadWrite` if a push destination writes to an Outlook calendar)
+4. API permissions → Add `Calendars.Read`. (Push destinations to Outlook calendars are not supported yet: focacal requests read-only scopes, so it skips them with a warning.)
 5. Certificates & secrets → New client secret
 6. Copy the Application (client) ID and secret into `.env`
 
@@ -292,8 +292,9 @@ destinations:                  # where focacal publishes
   loop is rejected, so `work -> home` together with `home -> work` is not
   allowed.
 - **Migration.** An old `sources:` config is converted on first start (a
-  `calendars.yaml.bak` is kept, migrated destinations get least-privilege
-  inputs, and cached events are re-synced once). **Old `writeback` and
+  `calendars.yaml.bak` is kept, a migrated destination keeps only the inputs it
+  listed (none if it listed none, with a warning) and an input without an
+  `event` block is migrated as hidden (`Busy`), and cached events are re-synced once). **Old `writeback` and
   `cross_busy` settings are not converted**: to keep writing planned blocks (or
   mirrored busy time) to a real calendar, add a push destination with the
   built-in `focacal` calendar as input and that calendar as target, as in the

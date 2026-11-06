@@ -170,7 +170,9 @@ account, calendars, a push destination and a second served feed.
 - A reference to an id that does not exist (a calendar naming a missing
   account, an input naming a missing calendar) is a warning in the log on load
   and the entry is skipped; it is not a load error. The API is stricter: a
-  patch that leaves a dangling reference is rejected with 422.
+  patch that adds a dangling reference is rejected with 422. References that
+  were already dangling in the file before the patch do not block unrelated
+  edits (for example deleting another calendar).
 
 ### Deleting and cascades
 
@@ -183,8 +185,7 @@ the response is the candidate view, with a `pruned` list of
 reloaded on a dry run. A real delete applies the delete and the cascade in one
 write. Only entries that change are touched (a destination left with no inputs after
 a delete stays in the file, empty); references you broke by hand
-elsewhere are left alone, and a delete still fails while such a reference
-exists.
+elsewhere are left alone and do not block the delete.
 
 ### Inputs and visibility
 
@@ -196,7 +197,8 @@ exists.
 - `event`: what is shown of that input's events. **Absent means full**, the
   event is published unchanged. **A block that is present is taken literally**,
   with every field you leave out treated as hidden, so
-  `title: {visibility: true, rename: Busy}` alone also hides the body.
+  `title: {visibility: true, rename: Busy}` alone also hides the body, and
+  `body: {visibility: false}` alone also turns the title into `Busy`.
   `title.visibility: false` shows `Busy`, or `title.rename` when set; a
   `rename` on a visible title replaces it. `body.visibility: false` empties
   the description.
@@ -258,11 +260,18 @@ into that calendar after each sync or replan, and records each write in the
   deleted remotely only if it starts no earlier than 7 days ago (the push
   window reaches 14 days ahead). Items that started earlier stay, and ledger rows are forgotten without a
   remote delete once the event ended more than 30 days ago.
-- **Mass-delete guard.** If one push would delete more than 5 items and more
-  than half of the in-window ledger rows, no deletes happen and the destination
-  reports a failure. The guard is lifted only for the single push that first
-  sees a changed destination config (inputs or target); the next push is
-  guarded again. The first push after the process starts is always guarded.
+- **Mass-delete guard.** If one push would delete more than 5 items and the
+  projection itself shrank to less than half of the in-window ledger rows (a
+  wiped store or a broken input), no deletes happen and the destination
+  reports a failure. Moving many items (a replan) keeps the projection as large
+  as the ledger, so the old copies are deleted normally. The guard is lifted
+  for pushes after a changed destination config (inputs or target) until one
+  succeeds, so a failed push does not lose the exemption. The first push after
+  the process starts is always guarded.
+- **Targets: CalDAV only for now.** Google and Outlook calendars are connected
+  with read-only OAuth scopes, so a destination targeting one is skipped, with
+  one warning per destination (the id and "target type is not writable yet").
+  Push to them needs write scopes, which are not enabled yet.
 - **Deleted remote events are recreated on change.** If you delete a pushed
   event remotely, focacal creates it again the next time that item changes
   (the update gets "not found", the ledger row is dropped and the item is
@@ -271,8 +280,14 @@ into that calendar after each sync or replan, and records each write in the
   others.
 - Removing a destination does not delete what it wrote. Retargeting one
   (changing its target calendar) does: the next push deletes its events in the
-  old target calendar that start no earlier than 7 days ago, and writes them to
-  the new one.
+  old target calendar that start no earlier than 7 days ago (their ledger rows
+  stay until the delete succeeds, and are retried), and writes them to the new
+  one. Changing only a calendar's `remote_id` (same calendar id) is not a
+  retarget: already-pushed events are not moved or cleaned up (known
+  limitation).
+- **`/calendar.ics` is not filtered.** The REST endpoint serves every event
+  with no destination filtering, under the same global auth as `/events`, so
+  hiding titles on the `focacal` destination does not apply to it.
 
 ### Migration to the calendar model
 
@@ -290,13 +305,18 @@ migration above:
   source it pointed at, or, for a Google, Outlook or CalDAV destination with
   its own details, gets a new account and a `plan: false` calendar. Inputs are
   mapped to the new calendar ids, and **inputs are least privilege**: a
-  destination that listed no usable inputs gets only `focacal`, never `all`,
-  and an input that names the destination's own target is dropped. `ics`
+  destination that listed no usable inputs gets none (it publishes nothing
+  until you add inputs, and the log names it), never `focacal` or `all`, and an
+  input that names the destination's own target is dropped. **An omitted
+  `event` block is migrated as an explicit all-hidden block** (the old default
+  was to obscure both title and body), so the destination publishes `Busy`; a
+  partial legacy block hides the omitted half. `ics`
   destinations cannot be converted and are dropped with a warning naming the
   destination id, as are destinations of any other unknown type.
 - **`writeback` and `cross_busy` are not converted.** The per-source
   `writeback` / `cross_busy` keys and any top-level `writeback:` block are
-  ignored by the migration (and by the loader). If your planned blocks or
+  ignored by the migration (the loader strips only the per-source keys; a
+  top-level `writeback:` in a file the loader reads is rejected). If your planned blocks or
   mirrored busy time were written to a real calendar, that stops until you
   create a push destination. For planned blocks, use the built-in `focacal`
   calendar as the input and the calendar to write to as the target:
@@ -318,7 +338,8 @@ migration above:
 - A `focacal` served destination is added if there is none.
 - Header comments and `oauth` are kept; comments inside the old entries are
   lost. The output is validated before anything is written, and the original
-  is saved as `calendars.yaml.bak` (mode 0600).
+  is saved as `calendars.yaml.bak` (mode 0600). To go back to an older
+  version, restore `calendars.yaml.bak`.
 - The store's caches are reset once, tied to the database schema version
   (`PRAGMA user_version` 2) rather than to the YAML conversion: events and sync
   state are cleared (so the next sync rebuilds them under the new ids), and each
