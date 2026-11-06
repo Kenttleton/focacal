@@ -87,7 +87,7 @@ func runStart(_ *cobra.Command, _ []string) error {
 	mcpAddr := fmt.Sprintf("%s:%d", cfg.Server.BindAddress, cfg.Server.MCPPort)
 
 	health := rest.NewHealthState()
-	caldavSrv := caldav.New(caldavAddr, log)
+	caldavSrv := caldav.New(caldavAddr, live, log)
 	restSrv := rest.New(reg, health, restAddr, log)
 	// The resolved config directory holds the domain files and
 	// credentials.yaml, whichever --config form was used.

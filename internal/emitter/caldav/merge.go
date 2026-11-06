@@ -13,6 +13,11 @@ const icsDateFormat = "20060102"
 
 // BuildICS produces a VCALENDAR string merging real events and planned blocks.
 func BuildICS(events []*store.Event, blocks []*store.Block) string {
+	return BuildICSNamed("Focacal", events, blocks)
+}
+
+// BuildICSNamed is BuildICS with the calendar's display name.
+func BuildICSNamed(name string, events []*store.Event, blocks []*store.Block) string {
 	var b strings.Builder
 
 	b.WriteString("BEGIN:VCALENDAR\r\n")
@@ -20,7 +25,7 @@ func BuildICS(events []*store.Event, blocks []*store.Block) string {
 	b.WriteString("PRODID:-//focacal//focacal//EN\r\n")
 	b.WriteString("CALSCALE:GREGORIAN\r\n")
 	b.WriteString("METHOD:PUBLISH\r\n")
-	b.WriteString("X-WR-CALNAME:Focacal\r\n")
+	b.WriteString("X-WR-CALNAME:" + icsEscape(name) + "\r\n")
 	b.WriteString("X-WR-TIMEZONE:UTC\r\n")
 
 	for _, e := range events {
