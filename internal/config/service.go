@@ -33,6 +33,7 @@ var ErrBadRequest = errors.New("bad request")
 var secretFields = map[string]bool{
 	"password":      true,
 	"ics_url":       true,
+	"url":           true,
 	"api_key":       true,
 	"password_hash": true,
 	"session_token": true,
@@ -45,7 +46,7 @@ type View struct {
 	// omitted.
 	Values map[string]any `json:"values"`
 	// Order lists each collection's ids in file order, since JSON objects are
-	// unordered. Destination ids are "id|calendar_id".
+	// unordered.
 	Order map[string][]string `json:"order"`
 	// PendingRestart is true when the saved server block differs from the
 	// one the process started with (Live.RestartRequired). Every other
@@ -287,10 +288,21 @@ func (s *Service) view(d Domain, cfg *Config) (View, error) {
 	for _, dk := range domainKeys[d] {
 		var err error
 		switch dk.name {
-		case "sources":
-			v.Values[dk.name], v.Order[dk.name], err = sourcesView(cfg.Sources)
+		case "accounts":
+			v.Values[dk.name], v.Order[dk.name], err = collectionView(cfg.Accounts, func(a AccountConfig) string { return a.ID },
+				func(m map[string]any, a AccountConfig) {
+					delete(m, "password")
+					redactURLFields(m)
+					m["has_secret"] = a.Password != "" || a.CredentialsFile != "" || hasUserinfo(a.CalDAVURL)
+				})
+		case "calendars":
+			v.Values[dk.name], v.Order[dk.name], err = collectionView(cfg.Calendars, func(c CalendarConfig) string { return c.ID },
+				func(m map[string]any, c CalendarConfig) {
+					delete(m, "url")
+					m["has_secret"] = c.URL != "" || c.URLEnv != ""
+				})
 		case "destinations":
-			v.Values[dk.name], v.Order[dk.name], err = destinationsView(cfg.Destinations)
+			v.Values[dk.name], v.Order[dk.name], err = collectionView(cfg.Destinations, func(d DestinationConfig) string { return d.ID }, nil)
 		default:
 			v.Values[dk.name], err = jsonValue(dk.get(cfg))
 			if v.Values[dk.name] == nil && dk.typ.Kind() == reflect.Map {
@@ -368,38 +380,23 @@ func redactURLFields(m map[string]any) {
 	}
 }
 
-func sourcesView(list []SourceConfig) (map[string]any, []string, error) {
-	values := map[string]any{}
-	order := []string{}
-	for _, src := range list {
-		m, err := jsonObject(src)
-		if err != nil {
-			return nil, nil, err
-		}
-		delete(m, "password")
-		delete(m, "ics_url")
-		redactURLFields(m)
-		m["has_secret"] = hasSecret(src)
-		values[src.ID] = m
-		order = append(order, src.ID)
-	}
-	return values, order, nil
-}
+func hasUserinfo(raw string) bool { _, ok := stripUserinfo(raw); return ok }
 
-func destinationsView(list []DestinationConfig) (map[string]any, []string, error) {
+// collectionView renders list as an object keyed by id plus the ids in file
+// order. scrub, when set, removes secrets from each item's JSON object.
+func collectionView[T any](list []T, id func(T) string, scrub func(map[string]any, T)) (map[string]any, []string, error) {
 	values := map[string]any{}
 	order := []string{}
-	for _, dst := range list {
-		m, err := jsonObject(dst)
+	for _, it := range list {
+		m, err := jsonObject(it)
 		if err != nil {
 			return nil, nil, err
 		}
-		delete(m, "password")
-		delete(m, "ics_url")
-		redactURLFields(m)
-		key := DestinationKey(dst.ID, dst.CalendarID)
-		values[key] = m
-		order = append(order, key)
+		if scrub != nil {
+			scrub(m, it)
+		}
+		values[id(it)] = m
+		order = append(order, id(it))
 	}
 	return values, order, nil
 }
@@ -518,6 +515,18 @@ func checkValue(path string, v any, t reflect.Type, inItem bool) error {
 			return nil
 		}
 		return validationf("%s: null is not allowed, a value is required", path)
+	}
+	if t == reflect.TypeFor[InputList]() {
+		switch iv := v.(type) {
+		case string:
+			if iv != "all" {
+				return badRequestf("%s: must be \"all\" or a list", path)
+			}
+			return nil
+		case []any:
+			return checkValue(path, v, reflect.TypeFor[[]DestinationInput](), inItem)
+		}
+		return badRequestf("%s: must be \"all\" or a list", path)
 	}
 	switch t.Kind() {
 	case reflect.Pointer:

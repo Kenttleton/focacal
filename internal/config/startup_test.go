@@ -48,7 +48,7 @@ func TestLoadStartAppliesEnvToRunningOnly(t *testing.T) {
 
 func TestLoadStartResolvesRelativeFileRefs(t *testing.T) {
 	dir := t.TempDir()
-	cal := `sources:
+	cal := `accounts:
   - id: rel
     type: google
     credentials_file: secrets/google.json
@@ -56,10 +56,11 @@ func TestLoadStartResolvesRelativeFileRefs(t *testing.T) {
   - id: abs
     type: google
     credentials_file: /secrets/abs.json
-destinations:
-  - id: rel
-    calendar_id: primary
-    credentials_file: dest.json
+calendars:
+  - id: rel-cal
+    account: rel
+  - id: abs-cal
+    account: abs
 `
 	if err := os.WriteFile(filepath.Join(dir, "calendars.yaml"), []byte(cal), 0644); err != nil {
 		t.Fatal(err)
@@ -77,8 +78,8 @@ destinations:
 	if got := running.Sources[1].CredentialsFile; got != "/secrets/abs.json" {
 		t.Errorf("absolute credentials_file changed to %q", got)
 	}
-	if got, want := running.Destinations[0].CredentialsFile, filepath.Join(dir, "dest.json"); got != want {
-		t.Errorf("destination credentials_file = %q, want %q", got, want)
+	if got, want := running.Accounts[0].CredentialsFile, filepath.Join(dir, "secrets/google.json"); got != want {
+		t.Errorf("account credentials_file = %q, want %q", got, want)
 	}
 	// started keeps the values as written, so pending_restart is unaffected.
 	if started.Sources[0].CredentialsFile != "secrets/google.json" {

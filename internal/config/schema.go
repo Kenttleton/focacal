@@ -15,6 +15,11 @@ const FocacalSource = "focacal"
 type Config struct {
 	UserConfig   `yaml:",inline"`
 	GlobalConfig `yaml:",inline"`
+
+	// Warnings lists non-fatal findings from the loose validator, such as a
+	// dangling reference in a hand-edited file. Entries carry ids only, never
+	// values. Derived on load; never stored.
+	Warnings []string `yaml:"-" json:"-"`
 }
 
 // UserConfig holds settings that belong to an individual user.
@@ -24,9 +29,14 @@ type UserConfig struct {
 	WorkingHours WorkingHours        `yaml:"working_hours"`
 	Lunch        LunchConfig         `yaml:"lunch"`
 	Focus        FocusConfig         `yaml:"focus"`
-	Sources      []SourceConfig      `yaml:"sources"`
+	Accounts     []AccountConfig     `yaml:"accounts"`
+	Calendars    []CalendarConfig    `yaml:"calendars"`
 	Destinations []DestinationConfig `yaml:"destinations"`
 	Colors       map[string]string   `yaml:"colors"`
+
+	// Sources is derived from Accounts and Calendars by Resolve: one resolved
+	// SourceConfig per calendar. It is never read from or written to a file.
+	Sources []SourceConfig `yaml:"-"`
 }
 
 // GlobalConfig holds deployment-level settings shared across all users.
@@ -104,6 +114,10 @@ type SourceConfig struct {
 	// ICS-specific fields (type: ics)
 	ICSURL    string `json:"ics_url" yaml:"ics_url,omitempty"`         // secret feed URL
 	ICSURLEnv string `json:"ics_url_env" yaml:"ics_url_env,omitempty"` // env var holding the feed URL
+
+	// Set by Resolve from the calendar and its account; not stored.
+	AccountID string `json:"-" yaml:"-"`    // owning account id, "" for a url calendar
+	Plan      bool   `json:"plan" yaml:"-"` // whether the planner schedules around this calendar
 }
 
 // ConflictConfig holds per-source switches for what counts as a conflict.
@@ -143,31 +157,7 @@ func (c ConflictConfig) CountsAllDay() bool {
 	return *c.AllDay
 }
 
-// DestinationConfig describes an output destination calendar.
-type DestinationConfig struct {
-	ID              string              `json:"id" yaml:"id"`
-	CalendarID      string              `json:"calendar_id" yaml:"calendar_id,omitempty"`
-	Type            string              `json:"type" yaml:"type"` // export-only connection type
-	CredentialsFile string              `json:"credentials_file" yaml:"credentials_file,omitempty"`
-	TokenFile       string              `json:"token_file" yaml:"token_file,omitempty"`
-	CalDAVURL       string              `json:"caldav_url" yaml:"caldav_url,omitempty"`
-	Username        string              `json:"username" yaml:"username,omitempty"`
-	Password        string              `json:"password" yaml:"password,omitempty"`
-	AuthType        string              `json:"auth_type" yaml:"auth_type,omitempty"`
-	ICSURL          string              `json:"ics_url" yaml:"ics_url,omitempty"`
-	ICSURLEnv       string              `json:"ics_url_env" yaml:"ics_url_env,omitempty"`
-	CalendarIDs     []string            `json:"calendar_ids" yaml:"calendar_ids,omitempty"`
-	Sources         []DestinationSource `json:"sources" yaml:"sources,omitempty"`
-}
-
-// DestinationSource refers to an input calendar (or focacal) shown in a destination.
-type DestinationSource struct {
-	ID         string          `json:"id" yaml:"id"`
-	CalendarID string          `json:"calendar_id" yaml:"calendar_id,omitempty"`
-	Event      EventVisibility `json:"event" yaml:"event"`
-}
-
-// EventVisibility holds title/body visibility for a destination source entry.
+// EventVisibility holds title/body visibility for a destination input.
 type EventVisibility struct {
 	Title FieldVisibility `json:"title" yaml:"title"`
 	Body  FieldVisibility `json:"body" yaml:"body"`

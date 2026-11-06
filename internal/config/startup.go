@@ -184,7 +184,7 @@ func loadSnapshotContent(dir string) (started, running *Config, content map[Doma
 }
 
 // ResolveFilePaths joins relative credentials_file and token_file values of
-// every source and destination with dir, so they resolve under the config
+// every account with dir, so they resolve under the config
 // directory rather than the process working directory. Absolute paths are
 // kept.
 func (c *Config) ResolveFilePaths(dir string) {
@@ -194,12 +194,9 @@ func (c *Config) ResolveFilePaths(dir string) {
 		}
 		return filepath.Join(dir, p)
 	}
-	for i := range c.Sources {
-		c.Sources[i].CredentialsFile = abs(c.Sources[i].CredentialsFile)
-		c.Sources[i].TokenFile = abs(c.Sources[i].TokenFile)
+	for i := range c.Accounts {
+		c.Accounts[i].CredentialsFile = abs(c.Accounts[i].CredentialsFile)
+		c.Accounts[i].TokenFile = abs(c.Accounts[i].TokenFile)
 	}
-	for i := range c.Destinations {
-		c.Destinations[i].CredentialsFile = abs(c.Destinations[i].CredentialsFile)
-		c.Destinations[i].TokenFile = abs(c.Destinations[i].TokenFile)
-	}
+	c.Resolve()
 }

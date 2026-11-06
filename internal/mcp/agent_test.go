@@ -21,7 +21,7 @@ func writeAgentCfg(t *testing.T, dir, baseURL, model, key, style string) {
 	t.Setenv("FOCACAL_AGENT_API_KEY", key) // api_key is env-only
 	app := "server:\n  mcp_port: 5234\n"
 	planner := fmt.Sprintf("agent:\n  base_url: %q\n  model: %q\nworking_hours:\n  start: \"09:00\"\n  end: \"17:00\"\n  timezone: \"UTC\"\nfocus:\n  style: %s\n  min_block_minutes: 30\n  max_block_minutes: 90\n", baseURL, model, style)
-	for name, body := range map[string]string{"config.yaml": app, "planner.yaml": planner, "calendars.yaml": "sources: []\n"} {
+	for name, body := range map[string]string{"config.yaml": app, "planner.yaml": planner, "calendars.yaml": "calendars: []\n"} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}

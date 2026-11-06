@@ -486,7 +486,7 @@ func TestPlannerReloadPublishesReplanRequest(t *testing.T) {
 		for name, body := range map[string]string{
 			"config.yaml":    "server:\n  mcp_port: 5234\n",
 			"planner.yaml":   "working_hours:\n  start: \"09:00\"\n  end: \"" + end + "\"\n  timezone: \"UTC\"\n",
-			"calendars.yaml": "sources: []\n",
+			"calendars.yaml": "calendars: []\n",
 		} {
 			if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
 				t.Fatal(err)

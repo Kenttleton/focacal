@@ -85,8 +85,9 @@ func TestValidateApp(t *testing.T) {
 func TestValidateCalendars(t *testing.T) {
 	base := func() *Config {
 		c := validConfig()
-		c.Sources = []SourceConfig{{ID: "work", Type: "google"}}
-		c.Destinations = []DestinationConfig{{ID: "work", CalendarID: "primary", Sources: []DestinationSource{{ID: "work"}}}}
+		c.Accounts = []AccountConfig{{ID: "g", Type: "google"}}
+		c.Calendars = []CalendarConfig{{ID: "work", Account: "g"}}
+		c.Destinations = []DestinationConfig{{ID: "out", Inputs: InputList{All: true}, Target: DestinationTarget{Served: true}}}
 		return c
 	}
 	if err := base().ValidateCalendars(); err != nil {
@@ -94,29 +95,16 @@ func TestValidateCalendars(t *testing.T) {
 	}
 	t.Run("inline secrets accepted", func(t *testing.T) {
 		c := base()
-		c.Sources = append(c.Sources, SourceConfig{ID: "f", Type: "ics", ICSURL: "https://x/y.ics"}, SourceConfig{ID: "d", Type: "caldav", Password: "pw"})
+		c.Calendars = append(c.Calendars, CalendarConfig{ID: "f", URL: "https://x/y.ics"})
+		c.Accounts = append(c.Accounts, AccountConfig{ID: "d", Type: "caldav", Password: "pw"})
 		if err := c.ValidateCalendars(); err != nil {
 			t.Fatal(err)
 		}
 	})
-	t.Run("dest without source or type", func(t *testing.T) {
-		c := base()
-		c.Destinations = []DestinationConfig{{ID: "ghost", CalendarID: "x"}}
-		if err := c.ValidateCalendars(); err == nil || !strings.Contains(err.Error(), "ghost") {
-			t.Fatalf("got %v", err)
-		}
-	})
-	t.Run("deleted referenced source", func(t *testing.T) {
-		c := base()
-		c.Sources = nil
-		if err := c.ValidateCalendars(); err == nil {
-			t.Fatal("expected error")
-		}
-	})
 	t.Run("duplicate ids", func(t *testing.T) {
 		c := base()
-		c.Sources = append(c.Sources, SourceConfig{ID: "work", Type: "google"})
-		if err := c.ValidateCalendars(); err == nil || !strings.Contains(err.Error(), "duplicate source id") {
+		c.Calendars = append(c.Calendars, CalendarConfig{ID: "work", Account: "g"})
+		if err := c.ValidateCalendars(); err == nil || !strings.Contains(err.Error(), "duplicate calendar id") {
 			t.Fatalf("got %v", err)
 		}
 	})
@@ -126,7 +114,7 @@ func TestValidateJoinsAll(t *testing.T) {
 	c := validConfig()
 	c.Server.RESTPort = 0
 	c.Focus.Style = "bogus"
-	c.Sources = []SourceConfig{{ID: "a", Type: "nope"}}
+	c.Accounts = []AccountConfig{{ID: "a", Type: "nope"}}
 	err := c.Validate()
 	if err == nil {
 		t.Fatal("expected error")

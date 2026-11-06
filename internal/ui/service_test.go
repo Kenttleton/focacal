@@ -23,7 +23,7 @@ func writeSources(t *testing.T, dir, calendars string) {
 
 func TestUISourcesFollowLiveConfig(t *testing.T) {
 	dir := t.TempDir()
-	writeSources(t, dir, "sources:\n  - id: one\n    type: ics\n    ics_url: https://x.example/a.ics\n")
+	writeSources(t, dir, "calendars:\n  - id: one\n    url: https://x.example/a.ics\n")
 	live, err := config.NewLive(dir, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -33,7 +33,7 @@ func TestUISourcesFollowLiveConfig(t *testing.T) {
 	if err != nil || len(got) != 1 || got[0]["id"] != "one" {
 		t.Fatalf("Sources = %v, %v", got, err)
 	}
-	writeSources(t, dir, "sources:\n  - id: one\n    type: ics\n    ics_url: https://x.example/a.ics\n  - id: two\n    type: ics\n    ics_url: https://x.example/b.ics\n")
+	writeSources(t, dir, "calendars:\n  - id: one\n    url: https://x.example/a.ics\n  - id: two\n    url: https://x.example/b.ics\n")
 	if _, err := live.Reload(); err != nil {
 		t.Fatal(err)
 	}

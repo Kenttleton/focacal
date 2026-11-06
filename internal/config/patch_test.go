@@ -36,7 +36,7 @@ func expectMap(t *testing.T, got map[string]any, wantYAML string) {
 	}
 }
 
-var testCollections = map[string]CollectionSpec{"sources": SourcesSpec, "destinations": DestinationsSpec}
+var testCollections = map[string]CollectionSpec{"calendars": IDSpec, "destinations": IDSpec}
 
 func TestPatchScalarReplaceKeepsSiblings(t *testing.T) {
 	got := patchMap(t, parseMap(t, "working_hours:\n  start: \"09:00\"\n  end: \"17:00\"\n"),
@@ -56,30 +56,30 @@ func TestPatchNullDeletesScalar(t *testing.T) {
 }
 
 func TestPatchCollectionAddEditDelete(t *testing.T) {
-	src := "sources:\n  - id: a\n    label: Old\n  - id: b\n    label: Gone\n  - id: c\n    label: Keep\n"
-	got := patchMap(t, parseMap(t, src), map[string]any{"sources": map[string]any{
-		"a": map[string]any{"label": "X"},
+	src := "calendars:\n  - id: a\n    name: Old\n  - id: b\n    name: Gone\n  - id: c\n    name: Keep\n"
+	got := patchMap(t, parseMap(t, src), map[string]any{"calendars": map[string]any{
+		"a": map[string]any{"name": "X"},
 		"b": nil,
 	}}, testCollections)
-	expectMap(t, got, "sources:\n  - id: a\n    label: X\n  - id: c\n    label: Keep\n")
+	expectMap(t, got, "calendars:\n  - id: a\n    name: X\n  - id: c\n    name: Keep\n")
 }
 
 func TestPatchNewCollectionItemAppended(t *testing.T) {
-	src := "sources:\n  - id: a\n    label: A\n"
-	got := patchMap(t, parseMap(t, src), map[string]any{"sources": map[string]any{
-		"z": map[string]any{"label": "Z"},
-		"m": map[string]any{"label": "M", "gone": nil},
+	src := "calendars:\n  - id: a\n    name: A\n"
+	got := patchMap(t, parseMap(t, src), map[string]any{"calendars": map[string]any{
+		"z": map[string]any{"name": "Z"},
+		"m": map[string]any{"name": "M", "gone": nil},
 		"q": nil,
 	}}, testCollections)
-	expectMap(t, got, "sources:\n  - id: a\n    label: A\n  - id: m\n    label: M\n  - id: z\n    label: Z\n")
+	expectMap(t, got, "calendars:\n  - id: a\n    name: A\n  - id: m\n    name: M\n  - id: z\n    name: Z\n")
 }
 
 func TestPatchEditedItemKeepsOtherFields(t *testing.T) {
-	src := "sources:\n  - id: a\n    label: Old\n    color: red\n    nested:\n      x: 1\n      y: 2\n"
-	got := patchMap(t, parseMap(t, src), map[string]any{"sources": map[string]any{
-		"a": map[string]any{"label": "New", "nested": map[string]any{"y": float64(3), "x": nil}},
+	src := "calendars:\n  - id: a\n    name: Old\n    color: red\n    nested:\n      x: 1\n      y: 2\n"
+	got := patchMap(t, parseMap(t, src), map[string]any{"calendars": map[string]any{
+		"a": map[string]any{"name": "New", "nested": map[string]any{"y": float64(3), "x": nil}},
 	}}, testCollections)
-	expectMap(t, got, "sources:\n  - id: a\n    label: New\n    color: red\n    nested:\n      y: 3\n")
+	expectMap(t, got, "calendars:\n  - id: a\n    name: New\n    color: red\n    nested:\n      y: 3\n")
 }
 
 func TestPatchWholeNumberFloatWritesInteger(t *testing.T) {
@@ -93,52 +93,46 @@ func TestPatchStringReplacesString(t *testing.T) {
 	expectMap(t, got, "a: p\nb: q\nc: r\n")
 }
 
-func TestPatchDestinationKeyCreatesIdentityFields(t *testing.T) {
+func TestPatchDestinationCreatesIdentityField(t *testing.T) {
 	doc := patchMap(t, parseMap(t, "destinations: []\n"), map[string]any{"destinations": map[string]any{
-		DestinationKey("g1", "cal@x"): map[string]any{"sources": []any{"a", "b"}},
+		"out": map[string]any{"inputs": "all"},
 	}}, testCollections)
-	expectMap(t, doc, "destinations:\n  - id: g1\n    calendar_id: cal@x\n    sources:\n      - a\n      - b\n")
+	expectMap(t, doc, "destinations:\n  - id: out\n    inputs: all\n")
 
-	// Existing item matched by composite key; nested list replaced wholesale.
+	// Existing item matched by id; nested value replaced wholesale.
 	doc = patchMap(t, doc, map[string]any{"destinations": map[string]any{
-		"g1|cal@x": map[string]any{"sources": []any{"c"}},
+		"out": map[string]any{"inputs": []any{map[string]any{"calendar": "c"}}},
 	}}, testCollections)
-	expectMap(t, doc, "destinations:\n  - id: g1\n    calendar_id: cal@x\n    sources:\n      - c\n")
+	expectMap(t, doc, "destinations:\n  - id: out\n    inputs:\n      - calendar: c\n")
 
-	if DestinationKey("a", "b") != "a|b" {
-		t.Error("DestinationKey format")
-	}
-	if id := DestinationsSpec.Identity("only"); len(id) != 1 || id["id"] != "only" {
-		t.Errorf("identity without pipe: %v", id)
-	}
-	if id := DestinationsSpec.Identity("a|b|c"); id["id"] != "a" || id["calendar_id"] != "b|c" {
-		t.Errorf("identity splits on first pipe: %v", id)
+	if id := IDSpec.Identity("only"); len(id) != 1 || id["id"] != "only" {
+		t.Errorf("identity: %v", id)
 	}
 }
 
 func TestPatchCollectionNotAListErrors(t *testing.T) {
-	err := ApplyMergePatch(parseMap(t, "sources: nope\n"), map[string]any{"sources": map[string]any{
-		"a": map[string]any{"label": "A"},
+	err := ApplyMergePatch(parseMap(t, "calendars: nope\n"), map[string]any{"calendars": map[string]any{
+		"a": map[string]any{"name": "A"},
 	}}, testCollections)
 	if err == nil {
 		t.Fatal("want error for a non-list collection")
 	}
-	err = ApplyMergePatch(map[string]any{}, map[string]any{"sources": "x"}, testCollections)
+	err = ApplyMergePatch(map[string]any{}, map[string]any{"calendars": "x"}, testCollections)
 	if err == nil {
 		t.Fatal("want error for a non-object collection patch")
 	}
 }
 
 func TestPatchAbsentCollectionCreated(t *testing.T) {
-	got := patchMap(t, parseMap(t, "a: 1\n"), map[string]any{"sources": map[string]any{
-		"s1": map[string]any{"label": "One"},
+	got := patchMap(t, parseMap(t, "a: 1\n"), map[string]any{"calendars": map[string]any{
+		"s1": map[string]any{"name": "One"},
 	}}, testCollections)
-	expectMap(t, got, "a: 1\nsources:\n  - id: s1\n    label: One\n")
+	expectMap(t, got, "a: 1\ncalendars:\n  - id: s1\n    name: One\n")
 
 	// Null deletes the whole collection; emptying leaves [].
-	got = patchMap(t, got, map[string]any{"sources": map[string]any{"s1": nil}}, testCollections)
-	expectMap(t, got, "a: 1\nsources: []\n")
-	got = patchMap(t, got, map[string]any{"sources": nil}, testCollections)
+	got = patchMap(t, got, map[string]any{"calendars": map[string]any{"s1": nil}}, testCollections)
+	expectMap(t, got, "a: 1\ncalendars: []\n")
+	got = patchMap(t, got, map[string]any{"calendars": nil}, testCollections)
 	expectMap(t, got, "a: 1\n")
 }
 

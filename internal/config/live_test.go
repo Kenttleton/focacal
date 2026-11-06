@@ -155,9 +155,9 @@ func TestLiveEnvOverrideSurvivesReload(t *testing.T) {
 
 func TestLiveResolvesFilePathsUnderDir(t *testing.T) {
 	dir := writeTestDir(t)
-	writeFile(t, dir, "calendars.yaml", "sources:\n  - id: g\n    type: google\n    credentials_file: g.json\n")
+	writeFile(t, dir, "calendars.yaml", "accounts:\n  - id: a\n    type: google\n    credentials_file: g.json\ncalendars:\n  - id: g\n    account: a\n")
 	l := newTestLive(t, dir)
-	if got := l.Current().Sources[0].CredentialsFile; got != filepath.Join(dir, "g.json") {
+	if got := l.Current().Accounts[0].CredentialsFile; got != filepath.Join(dir, "g.json") {
 		t.Errorf("credentials_file = %q", got)
 	}
 }
@@ -349,7 +349,7 @@ func TestReloadDeleteThenCreateConverges(t *testing.T) {
 	if _, err := l.Reload(); err == nil {
 		t.Fatal("deleted file should be refused")
 	}
-	writeFile(t, dir, "calendars.yaml.tmp", "sources:\n  - id: g\n    type: google\n    credentials_file: g.json\n")
+	writeFile(t, dir, "calendars.yaml.tmp", "accounts:\n  - id: a\n    type: google\n    credentials_file: g.json\ncalendars:\n  - id: g\n    account: a\n")
 	if err := os.Rename(filepath.Join(dir, "calendars.yaml.tmp"), p); err != nil {
 		t.Fatal(err)
 	}

@@ -37,26 +37,34 @@ func fullSource() SourceConfig {
 
 func fullDestination() DestinationConfig {
 	return DestinationConfig{
-		ID:              "out",
-		CalendarID:      "cal",
-		Type:            "caldav",
-		CredentialsFile: "/c.json",
-		TokenFile:       "/t.json",
-		CalDAVURL:       "https://caldav.example.com",
-		Username:        "u",
-		Password:        "p",
-		AuthType:        "bearer",
-		ICSURL:          "https://example.com/f.ics",
-		ICSURLEnv:       "ENV",
-		CalendarIDs:     []string{"a", "b"},
-		Sources: []DestinationSource{{
-			ID:         "work-google",
-			CalendarID: "primary",
-			Event: EventVisibility{
-				Title: FieldVisibility{Visibility: true, Rename: "Busy"},
-				Body:  FieldVisibility{Visibility: false, Rename: ""},
+		ID:   "out",
+		Name: "Out",
+		Inputs: InputList{Items: []DestinationInput{
+			{
+				Calendar: "work-google",
+				Event: EventVisibility{
+					Title: FieldVisibility{Visibility: true, Rename: "Busy"},
+					Body:  FieldVisibility{Visibility: false, Rename: ""},
+				},
 			},
+			{Calendar: FocacalSource, Kinds: []string{"focus", "lunch"}},
 		}},
+		Target: DestinationTarget{Calendar: "team", Served: false},
+	}
+}
+
+func fullAccount() AccountConfig {
+	return AccountConfig{
+		ID: "work-google", Name: "Work", Type: "caldav",
+		CredentialsFile: "/c.json", TokenFile: "/t.json",
+		CalDAVURL: "https://caldav.example.com", Username: "u", Password: "p", AuthType: "bearer",
+	}
+}
+
+func fullCalendar() CalendarConfig {
+	return CalendarConfig{
+		ID: "work", Name: "Work", Account: "work-google", RemoteID: "primary", Plan: boolPtr(false),
+		Conflicts: ConflictConfig{Declined: boolPtr(true)},
 	}
 }
 
@@ -88,12 +96,17 @@ func roundTrip[T any](t *testing.T, in T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// JSON is a subset of YAML, so one strict decoder reads both.
 	for kind, data := range map[string][]byte{"yaml": y, "json": j} {
 		var got T
 		dec := yaml.NewDecoder(bytes.NewReader(data))
 		dec.KnownFields(true)
-		if err := dec.Decode(&got); err != nil {
+		var err error
+		if kind == "json" {
+			err = json.Unmarshal(data, &got)
+		} else {
+			err = dec.Decode(&got)
+		}
+		if err != nil {
 			t.Fatalf("%s unmarshal: %v", kind, err)
 		}
 		if !reflect.DeepEqual(in, got) {
@@ -114,6 +127,41 @@ func TestSourceConfigRoundTripNilConflicts(t *testing.T) {
 
 func TestDestinationConfigRoundTrip(t *testing.T) {
 	roundTrip(t, fullDestination())
+}
+
+func TestAccountAndCalendarRoundTrip(t *testing.T) {
+	roundTrip(t, fullAccount())
+	roundTrip(t, fullCalendar())
+	roundTrip(t, CalendarConfig{ID: "feed", URL: "https://x/y.ics", URLEnv: "FOCACAL_FEED"})
+}
+
+func TestDestinationAllInputsRoundTrip(t *testing.T) {
+	in := DestinationConfig{ID: "out", Inputs: InputList{All: true}, Target: DestinationTarget{Served: true, Auth: "private"}}
+	roundTrip(t, in)
+	y, err := yaml.Marshal(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(y), "inputs: all") {
+		t.Errorf("all should marshal as a scalar:\n%s", y)
+	}
+	j, _ := json.Marshal(in)
+	if !strings.Contains(string(j), `"inputs":"all"`) {
+		t.Errorf("all should marshal as a JSON string: %s", j)
+	}
+}
+
+func TestInputListRejectsOtherScalars(t *testing.T) {
+	var l InputList
+	if err := yaml.Unmarshal([]byte("some"), &l); err == nil {
+		t.Error("yaml scalar other than all must fail")
+	}
+	if err := json.Unmarshal([]byte(`"some"`), &l); err == nil {
+		t.Error("json string other than all must fail")
+	}
+	if err := json.Unmarshal([]byte(`5`), &l); err == nil {
+		t.Error("json number must fail")
+	}
 }
 
 func TestUserSectionsRoundTrip(t *testing.T) {

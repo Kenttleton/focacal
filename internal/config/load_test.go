@@ -22,11 +22,11 @@ func TestDecodeDomain_StrictRejectsUnknownKey(t *testing.T) {
 
 func TestDecodeDomain_OnlyOwnKeys(t *testing.T) {
 	c := Defaults()
-	in := "working_hours:\n  start: \"08:00\"\nsources:\n  - id: stray\n    type: ics\n"
+	in := "working_hours:\n  start: \"08:00\"\ncalendars:\n  - id: stray\n    url: https://x/y.ics\n"
 	if err := decodeDomain(DomainApp, []byte(in), c); err != nil {
 		t.Fatalf("stray keys of other domains must be ignored: %v", err)
 	}
-	if len(c.Sources) != 0 || c.WorkingHours.Start != "09:00" {
+	if len(c.Calendars) != 0 || c.WorkingHours.Start != "09:00" {
 		t.Errorf("other domain's keys leaked: %+v", c)
 	}
 	if err := decodeDomain(DomainApp, []byte("server:\n  rest_prt: 1\n"), c); err == nil {
@@ -99,18 +99,32 @@ func TestDecodeDomain_LegacyAuthCredentialKeys(t *testing.T) {
 	}
 }
 
-func TestDecodeDomain_ObsoleteSourceKeysDroppedTyposRejected(t *testing.T) {
+func TestDecodeDomain_CalendarTypoRejected(t *testing.T) {
+	typo := "calendars:\n  - id: a\n    account: g\n    remote_idz: x\n"
+	err := decodeDomain(DomainCalendars, []byte(typo), Defaults())
+	if err == nil || !strings.Contains(err.Error(), "remote_idz") {
+		t.Errorf("typo not rejected by name: %v", err)
+	}
+}
+
+func TestDecodeDomain_NewCollectionsDecode(t *testing.T) {
 	c := Defaults()
-	ok := "sources:\n  - id: a\n    type: google\n    writeback: true\n    cross_busy: false\n"
-	if err := decodeDomain(DomainCalendars, []byte(ok), c); err != nil {
+	in := `accounts:
+  - id: g
+    type: google
+calendars:
+  - id: work
+    account: g
+    remote_id: primary
+destinations:
+  - id: out
+    inputs: all
+    target: {served: true}
+`
+	if err := decodeDomain(DomainCalendars, []byte(in), c); err != nil {
 		t.Fatal(err)
 	}
-	if len(c.Sources) != 1 || c.Sources[0].ID != "a" {
-		t.Errorf("sources = %+v", c.Sources)
-	}
-	typo := "sources:\n  - id: a\n    type: google\n    calendar_idz: [x]\n"
-	err := decodeDomain(DomainCalendars, []byte(typo), Defaults())
-	if err == nil || !strings.Contains(err.Error(), "calendar_idz") {
-		t.Errorf("typo not rejected by name: %v", err)
+	if len(c.Accounts) != 1 || len(c.Calendars) != 1 || len(c.Destinations) != 1 || !c.Destinations[0].Inputs.All {
+		t.Errorf("decoded = %+v", c.UserConfig)
 	}
 }

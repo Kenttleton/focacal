@@ -32,27 +32,35 @@ colors:
 `
 
 const testCalendarsYAML = `# calendars
-sources:
-  - id: work
+accounts:
+  - id: work-google
     type: google
     credentials_file: /secrets/work.json
-  - id: feed
-    type: ics
-    ics_url: https://secret.example/feed.ics
-  - id: dav
+  - id: dav-account
     type: caldav
     caldav_url: https://dav.example
     username: me
     password: hunter2
-  - id: plain
+  - id: plain-account
     type: caldav
     caldav_url: https://plain.example
-destinations:
+calendars:
   - id: work
-    calendar_id: primary
-    sources:
-      - id: work
-      - id: feed
+    account: work-google
+    remote_id: primary
+  - id: feed
+    url: https://secret.example/feed.ics
+  - id: dav
+    account: dav-account
+  - id: plain
+    account: plain-account
+destinations:
+  - id: out
+    inputs:
+      - calendar: work
+      - calendar: feed
+    target:
+      served: true
 `
 
 func writeTestDir(t *testing.T) string {
@@ -150,7 +158,7 @@ func TestGetCalendarsOmitsSecrets(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw, _ := json.Marshal(view)
-	for _, s := range []string{"hunter2", "secret.example", `"password"`, `"ics_url"`} {
+	for _, s := range []string{"hunter2", "secret.example", `"password"`, `"url":`} {
 		if strings.Contains(string(raw), s) {
 			t.Errorf("view leaks %s: %s", s, raw)
 		}
@@ -159,29 +167,36 @@ func TestGetCalendarsOmitsSecrets(t *testing.T) {
 	if m["pending_restart"] != false {
 		t.Errorf("pending_restart = %v, want false", m["pending_restart"])
 	}
-	sources := obj(t, m, "values", "sources")
-	wantSecret := map[string]bool{"work": true, "feed": true, "dav": true, "plain": false}
+	accounts := obj(t, m, "values", "accounts")
+	wantSecret := map[string]bool{"work-google": true, "dav-account": true, "plain-account": false}
 	for id, want := range wantSecret {
-		src := obj(t, sources, id)
-		if src["id"] != id {
-			t.Errorf("source %s: id field = %v", id, src["id"])
+		acct := obj(t, accounts, id)
+		if acct["id"] != id {
+			t.Errorf("account %s: id field = %v", id, acct["id"])
 		}
-		if src["has_secret"] != want {
-			t.Errorf("source %s: has_secret = %v, want %v", id, src["has_secret"], want)
+		if acct["has_secret"] != want {
+			t.Errorf("account %s: has_secret = %v, want %v", id, acct["has_secret"], want)
 		}
 	}
-	if u := obj(t, sources, "dav")["username"]; u != "me" {
+	if u := obj(t, accounts, "dav-account")["username"]; u != "me" {
 		t.Errorf("non-secret username dropped: %v", u)
 	}
-	dest := obj(t, m, "values", "destinations", "work|primary")
-	if dest["id"] != "work" || dest["calendar_id"] != "primary" {
-		t.Errorf("destination identity fields missing: %v", dest)
+	cals := obj(t, m, "values", "calendars")
+	if obj(t, cals, "feed")["has_secret"] != true || obj(t, cals, "work")["has_secret"] != false {
+		t.Errorf("calendar has_secret wrong: %v", cals)
 	}
-	if !reflect.DeepEqual(view.Order["sources"], []string{"work", "feed", "dav", "plain"}) {
-		t.Errorf("sources order = %v", view.Order["sources"])
+	dest := obj(t, m, "values", "destinations", "out")
+	if dest["id"] != "out" {
+		t.Errorf("destination identity field missing: %v", dest)
 	}
-	if !reflect.DeepEqual(view.Order["destinations"], []string{"work|primary"}) {
-		t.Errorf("destinations order = %v", view.Order["destinations"])
+	for k, want := range map[string][]string{
+		"accounts":     {"work-google", "dav-account", "plain-account"},
+		"calendars":    {"work", "feed", "dav", "plain"},
+		"destinations": {"out"},
+	} {
+		if !reflect.DeepEqual(view.Order[k], want) {
+			t.Errorf("%s order = %v, want %v", k, view.Order[k], want)
+		}
 	}
 }
 
@@ -222,7 +237,7 @@ func TestGetAppAndPlannerViews(t *testing.T) {
 	if d := obj(t, m, "values", "lunch")["duration_minutes"]; d != float64(60) {
 		t.Errorf("lunch default not applied: %v", d)
 	}
-	if _, ok := obj(t, m, "values")["sources"]; ok {
+	if _, ok := obj(t, m, "values")["calendars"]; ok {
 		t.Error("planner view must not include calendar keys")
 	}
 	if pl.Order == nil {
@@ -292,9 +307,9 @@ func TestPatchInvalidLeavesFilesUntouched(t *testing.T) {
 		"null section":        {DomainPlanner, `{"lunch":null}`},
 		"bad port":            {DomainApp, `{"server":{"rest_port":0}}`},
 		"duplicate port":      {DomainApp, `{"server":{"rest_port":5232}}`},
-		"unknown source type": {DomainCalendars, `{"sources":{"x":{"type":"nope"}}}`},
-		"colon in source id":  {DomainCalendars, `{"sources":{"a:b":{"type":"ics","ics_url":"https://x/y.ics"}}}`},
-		"id mismatch":         {DomainCalendars, `{"sources":{"work":{"id":"other"}}}`},
+		"unknown source type": {DomainCalendars, `{"accounts":{"x":{"type":"nope"}}}`},
+		"colon in source id":  {DomainCalendars, `{"calendars":{"a:b":{"url_env":"FOCACAL_X"}}}`},
+		"id mismatch":         {DomainCalendars, `{"calendars":{"work":{"id":"other"}}}`},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -329,25 +344,26 @@ func TestPatchRejectsUnknownFieldAndNonObjectBody(t *testing.T) {
 		domain Domain
 		body   string
 	}{
-		"unknown top-level":     {DomainPlanner, `{"bogus":1}`},
-		"other domain key":      {DomainPlanner, `{"sources":{}}`},
-		"unknown nested":        {DomainPlanner, `{"working_hours":{"bogus":"x"}}`},
-		"array body":            {DomainPlanner, `[]`},
-		"string body":           {DomainPlanner, `"x"`},
-		"null body":             {DomainPlanner, `null`},
-		"empty body":            {DomainPlanner, ``},
-		"malformed":             {DomainPlanner, `{`},
-		"trailing data":         {DomainPlanner, `{} {}`},
-		"wrong type":            {DomainPlanner, `{"working_hours":{"start":5}}`},
-		"fractional int":        {DomainPlanner, `{"lunch":{"duration_minutes":30.5}}`},
-		"section not object":    {DomainPlanner, `{"working_hours":"9-5"}`},
-		"color not string":      {DomainPlanner, `{"colors":{"focus":1}}`},
-		"unknown item field":    {DomainCalendars, `{"sources":{"work":{"bogus":1}}}`},
-		"collection as list":    {DomainCalendars, `{"sources":[]}`},
-		"item not object":       {DomainCalendars, `{"sources":{"work":5}}`},
-		"nested list item":      {DomainCalendars, `{"destinations":{"work|primary":{"sources":[{"bogus":1}]}}}`},
-		"calendar_ids not list": {DomainCalendars, `{"sources":{"work":{"calendar_ids":"primary"}}}`},
-		"app auth username":     {DomainApp, `{"auth":{"username":"x"}}`},
+		"unknown top-level":  {DomainPlanner, `{"bogus":1}`},
+		"other domain key":   {DomainPlanner, `{"sources":{}}`},
+		"unknown nested":     {DomainPlanner, `{"working_hours":{"bogus":"x"}}`},
+		"array body":         {DomainPlanner, `[]`},
+		"string body":        {DomainPlanner, `"x"`},
+		"null body":          {DomainPlanner, `null`},
+		"empty body":         {DomainPlanner, ``},
+		"malformed":          {DomainPlanner, `{`},
+		"trailing data":      {DomainPlanner, `{} {}`},
+		"wrong type":         {DomainPlanner, `{"working_hours":{"start":5}}`},
+		"fractional int":     {DomainPlanner, `{"lunch":{"duration_minutes":30.5}}`},
+		"section not object": {DomainPlanner, `{"working_hours":"9-5"}`},
+		"color not string":   {DomainPlanner, `{"colors":{"focus":1}}`},
+		"unknown item field": {DomainCalendars, `{"calendars":{"work":{"bogus":1}}}`},
+		"collection as list": {DomainCalendars, `{"calendars":[]}`},
+		"item not object":    {DomainCalendars, `{"calendars":{"work":5}}`},
+		"nested list item":   {DomainCalendars, `{"destinations":{"out":{"inputs":[{"bogus":1}]}}}`},
+		"inputs not all":     {DomainCalendars, `{"destinations":{"out":{"inputs":"some"}}}`},
+		"plan not bool":      {DomainCalendars, `{"calendars":{"work":{"plan":"yes"}}}`},
+		"app auth username":  {DomainApp, `{"auth":{"username":"x"}}`},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -370,7 +386,7 @@ func TestPatchDeleteReferencedSourceFails(t *testing.T) {
 	dir := writeTestDir(t)
 	svc, _ := newTestService(t, dir)
 	before := snapshotFiles(t, dir)
-	_, err := svc.Patch(DomainCalendars, []byte(`{"sources":{"work":null}}`))
+	_, err := svc.Patch(DomainCalendars, []byte(`{"calendars":{"work":null}}`))
 	if !errors.Is(err, ErrValidation) {
 		t.Fatalf("err = %v, want ErrValidation", err)
 	}
@@ -380,12 +396,12 @@ func TestPatchDeleteReferencedSourceFails(t *testing.T) {
 	assertFilesUnchanged(t, dir, before)
 
 	// Deleting an unreferenced source works.
-	view, err := svc.Patch(DomainCalendars, []byte(`{"sources":{"plain":null}}`))
+	view, err := svc.Patch(DomainCalendars, []byte(`{"calendars":{"plain":null}}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(view.Order["sources"], []string{"work", "feed", "dav"}) {
-		t.Errorf("order after delete = %v", view.Order["sources"])
+	if !reflect.DeepEqual(view.Order["calendars"], []string{"work", "feed", "dav"}) {
+		t.Errorf("order after delete = %v", view.Order["calendars"])
 	}
 }
 
@@ -394,11 +410,9 @@ func TestPatchRejectsInlineSecrets(t *testing.T) {
 		domain Domain
 		body   string
 	}{
-		"source password":      {DomainCalendars, `{"sources":{"dav":{"password":"x"}}}`},
-		"new ics source":       {DomainCalendars, `{"sources":{"new":{"type":"ics","ics_url":"https://x/y.ics"}}}`},
-		"destination password": {DomainCalendars, `{"destinations":{"work|primary":{"password":"x"}}}`},
-		"destination ics_url":  {DomainCalendars, `{"destinations":{"out|x":{"type":"ics","ics_url":"https://x"}}}`},
-		"agent api key":        {DomainPlanner, `{"agent":{"api_key":"sk-123"}}`},
+		"account password": {DomainCalendars, `{"accounts":{"dav-account":{"password":"x"}}}`},
+		"new url calendar": {DomainCalendars, `{"calendars":{"new":{"url":"https://x/y.ics"}}}`},
+		"agent api key":    {DomainPlanner, `{"agent":{"api_key":"sk-123"}}`},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -417,15 +431,15 @@ func TestPatchRejectsInlineSecrets(t *testing.T) {
 		t.Setenv("FOCACAL_TEST_FEED", "https://secret.example/other.ics")
 		dir := writeTestDir(t)
 		svc, _ := newTestService(t, dir)
-		view, err := svc.Patch(DomainCalendars, []byte(`{"sources":{"new":{"type":"ics","ics_url_env":"FOCACAL_TEST_FEED"}}}`))
+		view, err := svc.Patch(DomainCalendars, []byte(`{"calendars":{"new":{"url_env":"FOCACAL_TEST_FEED"}}}`))
 		if err != nil {
 			t.Fatal(err)
 		}
-		src := obj(t, asMap(t, view), "values", "sources", "new")
-		if src["has_secret"] != true || src["ics_url_env"] != "FOCACAL_TEST_FEED" {
+		src := obj(t, asMap(t, view), "values", "calendars", "new")
+		if src["has_secret"] != true || src["url_env"] != "FOCACAL_TEST_FEED" {
 			t.Errorf("new source view = %v", src)
 		}
-		if got := view.Order["sources"]; got[len(got)-1] != "new" {
+		if got := view.Order["calendars"]; got[len(got)-1] != "new" {
 			t.Errorf("new source not appended: %v", got)
 		}
 	})
@@ -433,7 +447,7 @@ func TestPatchRejectsInlineSecrets(t *testing.T) {
 	t.Run("null clears an inline secret", func(t *testing.T) {
 		dir := writeTestDir(t)
 		svc, _ := newTestService(t, dir)
-		if _, err := svc.Patch(DomainCalendars, []byte(`{"sources":{"dav":{"password":null}}}`)); err != nil {
+		if _, err := svc.Patch(DomainCalendars, []byte(`{"accounts":{"dav-account":{"password":null}}}`)); err != nil {
 			t.Fatal(err)
 		}
 		b, _ := os.ReadFile(filepath.Join(dir, "calendars.yaml"))
@@ -446,15 +460,15 @@ func TestPatchRejectsInlineSecrets(t *testing.T) {
 func TestPatchCalendarsAddsDestinationFromKey(t *testing.T) {
 	dir := writeTestDir(t)
 	svc, _ := newTestService(t, dir)
-	view, err := svc.Patch(DomainCalendars, []byte(`{"destinations":{"out|team":{"type":"caldav","caldav_url":"https://out.example","sources":[{"id":"focacal"}]}}}`))
+	view, err := svc.Patch(DomainCalendars, []byte(`{"destinations":{"team":{"inputs":[{"calendar":"focacal","kinds":["focus"]}],"target":{"calendar":"work"}}}}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(view.Order["destinations"], []string{"work|primary", "out|team"}) {
+	if !reflect.DeepEqual(view.Order["destinations"], []string{"out", "team"}) {
 		t.Errorf("destinations order = %v", view.Order["destinations"])
 	}
-	d := obj(t, asMap(t, view), "values", "destinations", "out|team")
-	if d["id"] != "out" || d["calendar_id"] != "team" {
+	d := obj(t, asMap(t, view), "values", "destinations", "team")
+	if d["id"] != "team" {
 		t.Errorf("identity not derived from key: %v", d)
 	}
 	if view.PendingRestart {
@@ -581,7 +595,7 @@ func TestConfigDirIsSelfContained(t *testing.T) {
 	if !reflect.DeepEqual(got.Colors, orig.Colors) || got.Colors["focus"] != "#00aa00" {
 		t.Errorf("colors differ: %v vs %v", got.Colors, orig.Colors)
 	}
-	if len(got.Sources) != 4 || len(got.Destinations) != 1 {
+	if len(got.Sources) != 4 || len(got.Accounts) != 3 || len(got.Destinations) != 1 {
 		t.Errorf("unexpected counts: %d sources, %d destinations", len(got.Sources), len(got.Destinations))
 	}
 
@@ -596,7 +610,7 @@ func TestConfigDirIsSelfContained(t *testing.T) {
 func TestLoadReadsOnlyEachDomainsOwnKeys(t *testing.T) {
 	t.Run("stray sources in config.yaml", func(t *testing.T) {
 		dir := t.TempDir()
-		stray := testAppYAML + "sources:\n  - id: a\n    type: google\n  - id: b\n    type: google\n"
+		stray := testAppYAML + "calendars:\n  - id: a\n    url_env: FOCACAL_A\n  - id: b\n    url_env: FOCACAL_B\n"
 		if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(stray), 0644); err != nil {
 			t.Fatal(err)
 		}
@@ -605,10 +619,10 @@ func TestLoadReadsOnlyEachDomainsOwnKeys(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(before.Order["sources"]) != 0 {
-			t.Fatalf("stray config.yaml sources leaked into calendars: %v", before.Order["sources"])
+		if len(before.Order["calendars"]) != 0 {
+			t.Fatalf("stray config.yaml calendars leaked into calendars: %v", before.Order["calendars"])
 		}
-		if _, err := svc.Patch(DomainCalendars, []byte(`{"sources":{"c":{"type":"google"}}}`)); err != nil {
+		if _, err := svc.Patch(DomainCalendars, []byte(`{"calendars":{"c":{"url_env":"FOCACAL_C"}}}`)); err != nil {
 			t.Fatal(err)
 		}
 		cfg, err := LoadDir(dir)
@@ -619,8 +633,8 @@ func TestLoadReadsOnlyEachDomainsOwnKeys(t *testing.T) {
 			t.Errorf("loaded sources = %+v, want only c", cfg.Sources)
 		}
 		after, _ := svc.Get(DomainCalendars)
-		if !reflect.DeepEqual(after.Order["sources"], []string{"c"}) {
-			t.Errorf("Get after patch = %v, want [c] (what LoadDir sees)", after.Order["sources"])
+		if !reflect.DeepEqual(after.Order["calendars"], []string{"c"}) {
+			t.Errorf("Get after patch = %v, want [c] (what LoadDir sees)", after.Order["calendars"])
 		}
 	})
 	t.Run("leftover working_hours in calendars.yaml", func(t *testing.T) {
@@ -648,9 +662,8 @@ func TestPatchRestrictsReferences(t *testing.T) {
 	t.Setenv("FOCACAL_ICS_X", "https://secret.example/x.ics")
 	t.Setenv("SOME_SECRET", "https://secret.example/y.ics")
 	accepted := []string{
-		`{"sources":{"n":{"type":"ics","ics_url_env":"FOCACAL_ICS_X"}}}`,
-		`{"sources":{"work":{"credentials_file":"creds/work.json","token_file":"tokens/work.json"}}}`,
-		`{"destinations":{"out|x":{"type":"ics","ics_url_env":"FOCACAL_ICS_X"}}}`,
+		`{"calendars":{"n":{"url_env":"FOCACAL_ICS_X"}}}`,
+		`{"accounts":{"work-google":{"credentials_file":"creds/work.json","token_file":"tokens/work.json"}}}`,
 	}
 	for _, body := range accepted {
 		t.Run("accept "+body, func(t *testing.T) {
@@ -661,14 +674,13 @@ func TestPatchRestrictsReferences(t *testing.T) {
 		})
 	}
 	rejected := []string{
-		`{"sources":{"n":{"type":"ics","ics_url_env":"SOME_SECRET"}}}`,
-		`{"sources":{"n":{"type":"ics","ics_url_env":"focacal_ics_x"}}}`,
-		`{"destinations":{"out|x":{"type":"ics","ics_url_env":"SOME_SECRET"}}}`,
-		`{"sources":{"work":{"token_file":"/data/focacal.db"}}}`,
-		`{"sources":{"work":{"credentials_file":"/etc/passwd"}}}`,
-		`{"sources":{"work":{"token_file":"../x"}}}`,
-		`{"sources":{"work":{"token_file":"a/../../x"}}}`,
-		`{"destinations":{"work|primary":{"token_file":"..\\x"}}}`,
+		`{"calendars":{"n":{"url_env":"SOME_SECRET"}}}`,
+		`{"calendars":{"n":{"url_env":"focacal_ics_x"}}}`,
+		`{"accounts":{"work-google":{"token_file":"/data/focacal.db"}}}`,
+		`{"accounts":{"work-google":{"credentials_file":"/etc/passwd"}}}`,
+		`{"accounts":{"work-google":{"token_file":"../x"}}}`,
+		`{"accounts":{"work-google":{"token_file":"a/../../x"}}}`,
+		`{"accounts":{"work-google":{"token_file":"..\\x"}}}`,
 	}
 	for _, body := range rejected {
 		t.Run("reject "+body, func(t *testing.T) {
@@ -693,13 +705,13 @@ func TestPatchAddThenDeleteDoesNotFlagRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v, err := svc.Patch(DomainCalendars, []byte(`{"sources":{"c":{"type":"google"}}}`)); err != nil || v.PendingRestart {
+	if v, err := svc.Patch(DomainCalendars, []byte(`{"calendars":{"c":{"url_env":"FOCACAL_C"}}}`)); err != nil || v.PendingRestart {
 		t.Fatalf("add: err %v pending %v", err, v.PendingRestart)
 	}
 	if len(live.Current().Sources) != 1 {
 		t.Errorf("running sources = %d, want 1", len(live.Current().Sources))
 	}
-	v, err := svc.Patch(DomainCalendars, []byte(`{"sources":{"c":null}}`))
+	v, err := svc.Patch(DomainCalendars, []byte(`{"calendars":{"c":null}}`))
 	if err != nil || v.PendingRestart {
 		t.Fatalf("delete: err %v pending %v", err, v.PendingRestart)
 	}
@@ -797,7 +809,7 @@ func TestLegacyDisplayTimezoneIgnored(t *testing.T) {
 // secret) value, since it reaches startup output and the server log.
 func TestDecodeErrorHidesValue(t *testing.T) {
 	dir := t.TempDir()
-	bad := "sources:\n  - id: feed\n    type: ics\n    ics_url: [https://x/LEAKME.ics]\n"
+	bad := "calendars:\n  - id: feed\n    url: [https://x/LEAKME.ics]\n"
 	if err := os.WriteFile(filepath.Join(dir, "calendars.yaml"), []byte(bad), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -808,7 +820,7 @@ func TestDecodeErrorHidesValue(t *testing.T) {
 	if strings.Contains(err.Error(), "LEAKME") {
 		t.Errorf("error quotes the value: %v", err)
 	}
-	if !strings.Contains(err.Error(), "ics_url") {
+	if !strings.Contains(err.Error(), "url") {
 		t.Errorf("error should name the field: %v", err)
 	}
 }
@@ -838,12 +850,12 @@ func TestPatchOrderStable(t *testing.T) {
 	svc, _ := newTestService(t, dir)
 	want := []string{"work", "feed", "dav", "plain"}
 	for i := 0; i < 3; i++ {
-		view, err := svc.Patch(DomainCalendars, []byte(`{"sources":{"feed":{"label":"Feed `+fmt.Sprint(i)+`"}}}`))
+		view, err := svc.Patch(DomainCalendars, []byte(`{"calendars":{"feed":{"name":"Feed `+fmt.Sprint(i)+`"}}}`))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !reflect.DeepEqual(view.Order["sources"], want) {
-			t.Fatalf("order = %v, want %v", view.Order["sources"], want)
+		if !reflect.DeepEqual(view.Order["calendars"], want) {
+			t.Fatalf("order = %v, want %v", view.Order["calendars"], want)
 		}
 	}
 	cfg, err := LoadDir(dir)
@@ -858,7 +870,7 @@ func TestPatchOrderStable(t *testing.T) {
 		t.Fatalf("on-disk order = %v", ids)
 	}
 	// A new item appends; existing positions are unchanged.
-	if _, err := svc.Patch(DomainCalendars, []byte(`{"sources":{"aaa":{"type":"ics","ics_url_env":"FOCACAL_X"}}}`)); err != nil {
+	if _, err := svc.Patch(DomainCalendars, []byte(`{"calendars":{"aaa":{"url_env":"FOCACAL_X"}}}`)); err != nil {
 		t.Fatal(err)
 	}
 	cfg, _ = LoadDir(dir)
@@ -906,7 +918,7 @@ func TestMarshalDomainDeterministicAndScoped(t *testing.T) {
 	if string(a) != string(b) {
 		t.Error("marshalDomain not deterministic")
 	}
-	if !strings.HasPrefix(string(a), "sources:\n") || strings.Contains(string(a), "working_hours") {
+	if !strings.HasPrefix(string(a), "accounts:\n") || strings.Contains(string(a), "working_hours") {
 		t.Errorf("unexpected output:\n%s", a)
 	}
 	pl, _ := marshalDomain(DomainPlanner, cfg)
@@ -918,7 +930,7 @@ func TestMarshalDomainDeterministicAndScoped(t *testing.T) {
 	if err := decodeDomain(DomainCalendars, a, again); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(again.Sources, cfg.Sources) || !reflect.DeepEqual(again.Destinations, cfg.Destinations) {
+	if !reflect.DeepEqual(again.Accounts, cfg.Accounts) || !reflect.DeepEqual(again.Calendars, cfg.Calendars) || !reflect.DeepEqual(again.Destinations, cfg.Destinations) {
 		t.Error("round trip changed calendars")
 	}
 }

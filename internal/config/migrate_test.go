@@ -34,15 +34,17 @@ colors:
 ollama:
   base_url: "http://host.docker.internal:11434" # unknown key, stays
 # Calendar sources
-sources:
+accounts:
   - id: "work-google" # unique slug
     type: "google"
-    calendar_ids: []
+calendars:
+  - id: work
+    account: work-google
 destinations:
-  - id: work-google
-    calendar_id: primary
-    sources:
-      - id: work-google
+  - id: out
+    inputs: all
+    target:
+      served: true
 server:
   caldav_port: 6232
   rest_port: 6233
@@ -109,7 +111,7 @@ func TestMigrateLegacySplitsFiles(t *testing.T) {
 	wantKeys := map[string][]string{
 		"config.yaml":    {"ollama", "server", "auth"},
 		"planner.yaml":   {"working_hours", "lunch", "focus", "colors"},
-		"calendars.yaml": {"sources", "destinations", "oauth"},
+		"calendars.yaml": {"accounts", "calendars", "destinations", "oauth"},
 	}
 	for f, keys := range wantKeys {
 		if got := topKeys(t, readFile(t, filepath.Join(dir, f))); !reflect.DeepEqual(got, keys) {
@@ -212,7 +214,7 @@ func TestMigrateKeepsBackupAndUnknownKeys(t *testing.T) {
 	if !strings.Contains(app, "ollama:") || !strings.Contains(app, "# unknown key, stays") {
 		t.Errorf("unknown key or its comment dropped:\n%s", app)
 	}
-	for _, gone := range []string{"password_hash", "session_token", "username", "working_hours", "sources"} {
+	for _, gone := range []string{"password_hash", "session_token", "username", "working_hours", "accounts"} {
 		if strings.Contains(app, gone) {
 			t.Errorf("config.yaml still contains %q:\n%s", gone, app)
 		}
@@ -286,7 +288,7 @@ func TestMigrateCredentialsOnly(t *testing.T) {
 
 func TestMigrateRefusesToOverwriteCalendars(t *testing.T) {
 	dir := writeLegacy(t, legacyYAML)
-	if err := os.WriteFile(filepath.Join(dir, "calendars.yaml"), []byte("sources: []\n"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "calendars.yaml"), []byte("accounts: []\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	before := snapshotFiles(t, dir)

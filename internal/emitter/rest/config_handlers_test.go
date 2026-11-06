@@ -36,15 +36,17 @@ colors:
 // The inline secrets here are legal in a hand-written file (spec 9.5) and
 // must never come back out of the API.
 const cfgTestCalendars = `# calendars
-sources:
-  - id: feed
-    type: ics
-    ics_url: https://secret.example/feed-SECRETTOKEN.ics
+accounts:
   - id: dav
     type: caldav
     caldav_url: https://dav.example
     username: me
     password: hunter2-SECRETPW
+calendars:
+  - id: feed
+    url: https://secret.example/feed-SECRETTOKEN.ics
+  - id: davcal
+    account: dav
 `
 
 // newConfigTestServer builds a Server over a temp config dir holding the
@@ -154,7 +156,7 @@ func TestGetConfigDomains(t *testing.T) {
 	want := map[string][]string{
 		"app":       {"server", "auth"},
 		"planner":   {"working_hours", "lunch", "focus", "colors", "agent"},
-		"calendars": {"sources", "destinations", "oauth"},
+		"calendars": {"accounts", "calendars", "destinations", "oauth"},
 	}
 	for domain, keys := range want {
 		t.Run(domain, func(t *testing.T) {
@@ -188,20 +190,23 @@ func TestGetCalendarsHasNoSecrets(t *testing.T) {
 		t.Fatalf("GET = %d %s", rec.Code, rec.Body)
 	}
 	body := rec.Body.String()
-	for _, secret := range []string{"SECRETTOKEN", "SECRETPW", `"password"`, `"ics_url"`} {
+	for _, secret := range []string{"SECRETTOKEN", "SECRETPW", `"password"`, `"url":`} {
 		if strings.Contains(body, secret) {
 			t.Errorf("response contains %s: %s", secret, body)
 		}
 	}
 	v := decodeView(t, rec)
-	if got := v.Order["sources"]; len(got) != 2 || got[0] != "feed" || got[1] != "dav" {
+	if got := v.Order["calendars"]; len(got) != 2 || got[0] != "feed" || got[1] != "davcal" {
 		t.Errorf("order = %v", got)
 	}
-	for _, id := range []string{"feed", "dav"} {
-		src := v.Values["sources"].(map[string]any)[id].(map[string]any)
-		if src["has_secret"] != true {
-			t.Errorf("%s has_secret = %v, want true", id, src["has_secret"])
-		}
+	if got := v.Order["accounts"]; len(got) != 1 || got[0] != "dav" {
+		t.Errorf("accounts order = %v", got)
+	}
+	if src := v.Values["calendars"].(map[string]any)["feed"].(map[string]any); src["has_secret"] != true {
+		t.Errorf("feed has_secret = %v, want true", src["has_secret"])
+	}
+	if acct := v.Values["accounts"].(map[string]any)["dav"].(map[string]any); acct["has_secret"] != true {
+		t.Errorf("dav has_secret = %v, want true", acct["has_secret"])
 	}
 }
 
@@ -252,7 +257,7 @@ func TestPatchInlineSecretReturns422WithoutEcho(t *testing.T) {
 	s, dir := newConfigTestServer(t)
 	before := readFile(t, filepath.Join(dir, "calendars.yaml"))
 	rec := doReq(t, s, http.MethodPatch, "/config/calendars",
-		[]byte(`{"sources":{"dav":{"password":"NEWSECRET-xyz"}}}`))
+		[]byte(`{"accounts":{"dav":{"password":"NEWSECRET-xyz"}}}`))
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("PATCH = %d %s, want 422", rec.Code, rec.Body)
 	}
@@ -431,8 +436,8 @@ func TestConfigFileErrorReturns500WithoutContents(t *testing.T) {
 	// one does not parse as YAML, one parses but does not decode (a decoder
 	// error may quote the offending value).
 	for name, broken := range map[string]string{
-		"parse":  "sources:\n  - id: feed\n    ics_url: https://x/LEAKME.ics\n   bad: [\n",
-		"decode": "sources:\n  - id: feed\n    type: ics\n    ics_url: [https://x/LEAKME.ics]\n",
+		"parse":  "calendars:\n  - id: feed\n    url: https://x/LEAKME.ics\n   bad: [\n",
+		"decode": "calendars:\n  - id: feed\n    url: [https://x/LEAKME.ics]\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			var logBuf syncBuffer
@@ -448,7 +453,7 @@ func TestConfigFileErrorReturns500WithoutContents(t *testing.T) {
 				{http.MethodGet, "/config/calendars", nil},
 				{http.MethodGet, "/config/planner", nil},
 				{http.MethodPatch, "/config/planner", []byte(`{"working_hours":{"start":"08:00"}}`)},
-				{http.MethodPatch, "/config/calendars", []byte(`{"sources":{"feed":{"label":"x"}}}`)},
+				{http.MethodPatch, "/config/calendars", []byte(`{"calendars":{"feed":{"name":"x"}}}`)},
 			} {
 				rec := doReq(t, s, tc.method, tc.path, tc.body)
 				if rec.Code != http.StatusInternalServerError {

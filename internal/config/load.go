@@ -70,7 +70,7 @@ func dropObsoleteKeys(key string, v *yaml.Node) *yaml.Node {
 	switch key {
 	case "auth":
 		return withoutKeys(v, legacyCredentialKeys)
-	case "sources", "destinations":
+	case "sources":
 		if v.Kind != yaml.SequenceNode {
 			return v
 		}
@@ -109,6 +109,7 @@ func loadFiles(files map[Domain][]byte) (*Config, error) {
 			return nil, err
 		}
 	}
+	cfg.Resolve()
 	return cfg, nil
 }
 

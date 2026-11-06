@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"math"
 	"sort"
-	"strings"
 )
 
 // CollectionSpec describes a top-level YAML sequence of mappings whose items
@@ -16,30 +15,13 @@ type CollectionSpec struct {
 	Identity func(key string) map[string]any
 }
 
-// DestinationKey is the identity of a destination: source account id plus
-// calendar id.
-func DestinationKey(id, calendarID string) string { return id + "|" + calendarID }
-
 func str(v any) string { s, _ := v.(string); return s }
 
-// SourcesSpec identifies sources by their id.
-var SourcesSpec = CollectionSpec{
+// IDSpec identifies the items of accounts, calendars and destinations by
+// their id.
+var IDSpec = CollectionSpec{
 	Key:      func(item map[string]any) string { return str(item["id"]) },
 	Identity: func(key string) map[string]any { return map[string]any{"id": key} },
-}
-
-// DestinationsSpec identifies destinations by id and calendar_id.
-var DestinationsSpec = CollectionSpec{
-	Key: func(item map[string]any) string {
-		return DestinationKey(str(item["id"]), str(item["calendar_id"]))
-	},
-	Identity: func(key string) map[string]any {
-		id, cal, ok := strings.Cut(key, "|")
-		if !ok {
-			return map[string]any{"id": key}
-		}
-		return map[string]any{"id": id, "calendar_id": cal}
-	},
 }
 
 // ApplyMergePatch applies an RFC 7396 merge patch to doc in place. Keys named

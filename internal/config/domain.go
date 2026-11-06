@@ -86,8 +86,9 @@ var domainKeys = map[Domain][]domainKey{
 		}, write: func(c *Config) any { return c.Agent }},
 	},
 	DomainCalendars: {
-		{name: "sources", typ: reflect.TypeFor[SourceConfig](), collection: &SourcesSpec, get: func(c *Config) any { return c.Sources }},
-		{name: "destinations", typ: reflect.TypeFor[DestinationConfig](), collection: &DestinationsSpec, get: func(c *Config) any { return c.Destinations }},
+		{name: "accounts", typ: reflect.TypeFor[AccountConfig](), collection: &IDSpec, get: func(c *Config) any { return c.Accounts }},
+		{name: "calendars", typ: reflect.TypeFor[CalendarConfig](), collection: &IDSpec, get: func(c *Config) any { return c.Calendars }},
+		{name: "destinations", typ: reflect.TypeFor[DestinationConfig](), collection: &IDSpec, get: func(c *Config) any { return c.Destinations }},
 		{name: "oauth", typ: reflect.TypeFor[OAuthConfig](), get: func(c *Config) any { return c.OAuth }},
 	},
 }

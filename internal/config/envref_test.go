@@ -10,12 +10,14 @@ import (
 
 // unresolvedCalendarsYAML has an ics source whose env var is not set (the
 // usual state when .env never reached the container).
-const unresolvedCalendarsYAML = `sources:
-  - id: work
+const unresolvedCalendarsYAML = `accounts:
+  - id: g
     type: google
+calendars:
+  - id: work
+    account: g
   - id: team
-    type: ics
-    ics_url_env: FOCACAL_TEST_UNSET_FEED
+    url_env: FOCACAL_TEST_UNSET_FEED
 `
 
 func writeUnresolvedDir(t *testing.T) string {
@@ -52,27 +54,14 @@ func TestLoadStartUnresolvedEnvRefWarns(t *testing.T) {
 	}
 }
 
-func TestUnresolvedEnvRefsCoversDestinations(t *testing.T) {
-	os.Unsetenv("FOCACAL_TEST_UNSET_OUT")
-	c := validConfig()
-	c.Destinations = []DestinationConfig{{ID: "out", CalendarID: "x", Type: "ics", ICSURLEnv: "FOCACAL_TEST_UNSET_OUT"}}
-	refs := c.UnresolvedEnvRefs()
-	if len(refs) != 1 || refs[0].Kind != "destination" || refs[0].ID != "out|x" || refs[0].Env != "FOCACAL_TEST_UNSET_OUT" {
-		t.Errorf("UnresolvedEnvRefs = %+v", refs)
-	}
-	if err := c.ValidateCalendars(); err != nil {
-		t.Errorf("unresolved destination ref must not fail validation: %v", err)
-	}
-}
-
 func TestICSSourceNeedsAReference(t *testing.T) {
 	c := validConfig()
-	c.Sources = []SourceConfig{{ID: "bare", Type: "ics"}}
+	c.Calendars = []CalendarConfig{{ID: "bare"}}
 	err := c.ValidateCalendars()
 	if err == nil || !strings.Contains(err.Error(), "bare") {
 		t.Fatalf("ics source without ics_url or ics_url_env: err = %v", err)
 	}
-	c.Sources = []SourceConfig{{ID: "ref", Type: "ics", ICSURLEnv: "FOCACAL_TEST_UNSET_FEED"}}
+	c.Calendars = []CalendarConfig{{ID: "ref", URLEnv: "FOCACAL_TEST_UNSET_FEED"}}
 	os.Unsetenv("FOCACAL_TEST_UNSET_FEED")
 	if err := c.ValidateCalendars(); err != nil {
 		t.Errorf("unresolved reference must validate: %v", err)
@@ -82,16 +71,16 @@ func TestICSSourceNeedsAReference(t *testing.T) {
 func TestPatchWithUnresolvedEnvRefPresent(t *testing.T) {
 	dir := writeUnresolvedDir(t)
 	svc, _ := newTestService(t, dir)
-	if _, err := svc.Patch(DomainCalendars, []byte(`{"sources":{"work":{"label":"Work"}}}`)); err != nil {
+	if _, err := svc.Patch(DomainCalendars, []byte(`{"calendars":{"work":{"name":"Work"}}}`)); err != nil {
 		t.Fatalf("unrelated PATCH failed: %v", err)
 	}
 	// A new source referencing a variable that is not set yet is accepted:
 	// the user may add it to .env and restart afterwards.
-	if _, err := svc.Patch(DomainCalendars, []byte(`{"sources":{"later":{"type":"ics","ics_url_env":"FOCACAL_TEST_UNSET_LATER"}}}`)); err != nil {
+	if _, err := svc.Patch(DomainCalendars, []byte(`{"calendars":{"later":{"url_env":"FOCACAL_TEST_UNSET_LATER"}}}`)); err != nil {
 		t.Fatalf("new source with an unset env ref: %v", err)
 	}
 	// Neither a reference nor an inline URL is still invalid.
-	if _, err := svc.Patch(DomainCalendars, []byte(`{"sources":{"bare":{"type":"ics"}}}`)); !errors.Is(err, ErrValidation) {
+	if _, err := svc.Patch(DomainCalendars, []byte(`{"calendars":{"bare":{"name":"Bare"}}}`)); !errors.Is(err, ErrValidation) {
 		t.Fatalf("ics source without reference: err = %v, want ErrValidation", err)
 	}
 }
@@ -111,12 +100,9 @@ func TestResolveICSURLNamesUnsetVariable(t *testing.T) {
 
 func TestPatchRejectsPipeInIDs(t *testing.T) {
 	for name, body := range map[string]string{
-		"source id": `{"sources":{"a|b":{"type":"google"}}}`,
-		// Export-only destinations validate on their own, so only the "|"
-		// rule stops these.
-		"destination pipes":   `{"destinations":{"x|y|z":{"type":"caldav","caldav_url":"https://d.example/"}}}`,
-		"destination cal id":  `{"destinations":{"x|y|z":{"type":"caldav","caldav_url":"https://d.example/","calendar_id":"y|z"}}}`,
-		"destination no pipe": `{"destinations":{"work":{"sources":[{"id":"work"}]}}}`,
+		"account id":     `{"accounts":{"a|b":{"type":"google"}}}`,
+		"calendar id":    `{"calendars":{"a|b":{"url_env":"FOCACAL_X"}}}`,
+		"destination id": `{"destinations":{"x|y":{"inputs":"all","target":{"served":true}}}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			dir := writeTestDir(t)
@@ -132,15 +118,10 @@ func TestPatchRejectsPipeInIDs(t *testing.T) {
 
 func TestCalDAVURLUserinfoIsASecret(t *testing.T) {
 	dir := t.TempDir()
-	body := `sources:
+	body := `accounts:
   - id: dav
     type: caldav
     caldav_url: https://me:SECRETPW@dav.example/cal/
-destinations:
-  - id: out
-    calendar_id: x
-    type: caldav
-    caldav_url: https://me:SECRETPW2@dav.example/out/
 `
 	if err := os.WriteFile(filepath.Join(dir, "calendars.yaml"), []byte(body), 0o600); err != nil {
 		t.Fatal(err)
@@ -151,20 +132,15 @@ destinations:
 		t.Fatal(err)
 	}
 	m := asMap(t, v)
-	src := obj(t, m, "values", "sources", "dav")
-	if src["caldav_url"] != "https://dav.example/cal/" || src["has_secret"] != true {
-		t.Errorf("source view = %v", src)
-	}
-	dst := obj(t, m, "values", "destinations", "out|x")
-	if dst["caldav_url"] != "https://dav.example/out/" {
-		t.Errorf("destination view = %v", dst)
+	acct := obj(t, m, "values", "accounts", "dav")
+	if acct["caldav_url"] != "https://dav.example/cal/" || acct["has_secret"] != true {
+		t.Errorf("account view = %v", acct)
 	}
 
 	before := snapshotFiles(t, dir)
 	for _, p := range []string{
-		`{"sources":{"dav":{"caldav_url":"https://me:NEWPW@dav.example/"}}}`,
-		`{"sources":{"dav":{"caldav_url":"https://me@dav.example/"}}}`,
-		`{"destinations":{"out|x":{"caldav_url":"https://u:NEWPW@dav.example/"}}}`,
+		`{"accounts":{"dav":{"caldav_url":"https://me:NEWPW@dav.example/"}}}`,
+		`{"accounts":{"dav":{"caldav_url":"https://me@dav.example/"}}}`,
 	} {
 		_, err := svc.Patch(DomainCalendars, []byte(p))
 		if !errors.Is(err, ErrValidation) {
@@ -175,7 +151,7 @@ destinations:
 		}
 	}
 	assertFilesUnchanged(t, dir, before)
-	if _, err := svc.Patch(DomainCalendars, []byte(`{"sources":{"dav":{"caldav_url":"https://dav.example/new/"}}}`)); err != nil {
+	if _, err := svc.Patch(DomainCalendars, []byte(`{"accounts":{"dav":{"caldav_url":"https://dav.example/new/"}}}`)); err != nil {
 		t.Errorf("plain caldav_url: %v", err)
 	}
 }
