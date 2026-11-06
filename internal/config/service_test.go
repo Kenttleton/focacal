@@ -249,7 +249,7 @@ func TestPatchPlannerPersistsAndApplies(t *testing.T) {
 	dir := writeTestDir(t)
 	svc, started := newTestService(t, dir)
 
-	view, err := svc.Patch(DomainPlanner, []byte(`{"working_hours":{"end":"18:00"}}`))
+	view, err := svc.Patch(DomainPlanner, []byte(`{"working_hours":{"end":"18:00"}}`), PatchOptions{})
 	if err != nil {
 		t.Fatalf("Patch: %v", err)
 	}
@@ -277,7 +277,7 @@ func TestPatchPlannerPersistsAndApplies(t *testing.T) {
 func TestPatchServerFlagsRestartAndRevertClears(t *testing.T) {
 	dir := writeTestDir(t)
 	svc, _ := newTestService(t, dir)
-	view, err := svc.Patch(DomainApp, []byte(`{"server":{"rest_port":5300}}`))
+	view, err := svc.Patch(DomainApp, []byte(`{"server":{"rest_port":5300}}`), PatchOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -287,7 +287,7 @@ func TestPatchServerFlagsRestartAndRevertClears(t *testing.T) {
 	if cal, _ := svc.Get(DomainCalendars); !cal.PendingRestart {
 		t.Error("the flag is process-wide, calendars view should show it too")
 	}
-	view, err = svc.Patch(DomainApp, []byte(`{"server":{"rest_port":5233}}`))
+	view, err = svc.Patch(DomainApp, []byte(`{"server":{"rest_port":5233}}`), PatchOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -316,7 +316,7 @@ func TestPatchInvalidLeavesFilesUntouched(t *testing.T) {
 			dir := writeTestDir(t)
 			svc, _ := newTestService(t, dir)
 			before := snapshotFiles(t, dir)
-			_, err := svc.Patch(tc.domain, []byte(tc.body))
+			_, err := svc.Patch(tc.domain, []byte(tc.body), PatchOptions{})
 			if !errors.Is(err, ErrValidation) {
 				t.Fatalf("err = %v, want ErrValidation", err)
 			}
@@ -330,7 +330,7 @@ func TestPatchInvalidLeavesFilesUntouched(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := svc.Patch(DomainPlanner, []byte(`{"focus":{"style":"bogus"}}`)); !errors.Is(err, ErrValidation) {
+		if _, err := svc.Patch(DomainPlanner, []byte(`{"focus":{"style":"bogus"}}`), PatchOptions{}); !errors.Is(err, ErrValidation) {
 			t.Fatalf("err = %v, want ErrValidation", err)
 		}
 		if _, err := os.Stat(filepath.Join(dir, "planner.yaml")); !os.IsNotExist(err) {
@@ -370,7 +370,7 @@ func TestPatchRejectsUnknownFieldAndNonObjectBody(t *testing.T) {
 			dir := writeTestDir(t)
 			svc, _ := newTestService(t, dir)
 			before := snapshotFiles(t, dir)
-			_, err := svc.Patch(tc.domain, []byte(tc.body))
+			_, err := svc.Patch(tc.domain, []byte(tc.body), PatchOptions{})
 			if !errors.Is(err, ErrBadRequest) {
 				t.Fatalf("err = %v, want ErrBadRequest", err)
 			}
@@ -382,21 +382,18 @@ func TestPatchRejectsUnknownFieldAndNonObjectBody(t *testing.T) {
 	}
 }
 
-func TestPatchDeleteReferencedSourceFails(t *testing.T) {
+func TestPatchDanglingRefFailsAndUnreferencedDeleteWorks(t *testing.T) {
 	dir := writeTestDir(t)
 	svc, _ := newTestService(t, dir)
 	before := snapshotFiles(t, dir)
-	_, err := svc.Patch(DomainCalendars, []byte(`{"calendars":{"work":null}}`))
-	if !errors.Is(err, ErrValidation) {
-		t.Fatalf("err = %v, want ErrValidation", err)
-	}
-	if !strings.Contains(err.Error(), "work") {
-		t.Errorf("error should name the source: %v", err)
+	_, err := svc.Patch(DomainCalendars, []byte(`{"calendars":{"ghost-ref":{"account":"nope"}}}`), PatchOptions{})
+	if !errors.Is(err, ErrValidation) || !strings.Contains(err.Error(), "nope") {
+		t.Fatalf("err = %v, want ErrValidation naming the account", err)
 	}
 	assertFilesUnchanged(t, dir, before)
 
 	// Deleting an unreferenced source works.
-	view, err := svc.Patch(DomainCalendars, []byte(`{"calendars":{"plain":null}}`))
+	view, err := svc.Patch(DomainCalendars, []byte(`{"calendars":{"plain":null}}`), PatchOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -419,7 +416,7 @@ func TestPatchRejectsInlineSecrets(t *testing.T) {
 			dir := writeTestDir(t)
 			svc, _ := newTestService(t, dir)
 			before := snapshotFiles(t, dir)
-			_, err := svc.Patch(tc.domain, []byte(tc.body))
+			_, err := svc.Patch(tc.domain, []byte(tc.body), PatchOptions{})
 			if !errors.Is(err, ErrValidation) {
 				t.Fatalf("err = %v, want ErrValidation", err)
 			}
@@ -431,7 +428,7 @@ func TestPatchRejectsInlineSecrets(t *testing.T) {
 		t.Setenv("FOCACAL_TEST_FEED", "https://secret.example/other.ics")
 		dir := writeTestDir(t)
 		svc, _ := newTestService(t, dir)
-		view, err := svc.Patch(DomainCalendars, []byte(`{"calendars":{"new":{"url_env":"FOCACAL_TEST_FEED"}}}`))
+		view, err := svc.Patch(DomainCalendars, []byte(`{"calendars":{"new":{"url_env":"FOCACAL_TEST_FEED"}}}`), PatchOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -447,7 +444,7 @@ func TestPatchRejectsInlineSecrets(t *testing.T) {
 	t.Run("null clears an inline secret", func(t *testing.T) {
 		dir := writeTestDir(t)
 		svc, _ := newTestService(t, dir)
-		if _, err := svc.Patch(DomainCalendars, []byte(`{"accounts":{"dav-account":{"password":null}}}`)); err != nil {
+		if _, err := svc.Patch(DomainCalendars, []byte(`{"accounts":{"dav-account":{"password":null}}}`), PatchOptions{}); err != nil {
 			t.Fatal(err)
 		}
 		b, _ := os.ReadFile(filepath.Join(dir, "calendars.yaml"))
@@ -460,7 +457,7 @@ func TestPatchRejectsInlineSecrets(t *testing.T) {
 func TestPatchCalendarsAddsDestinationFromKey(t *testing.T) {
 	dir := writeTestDir(t)
 	svc, _ := newTestService(t, dir)
-	view, err := svc.Patch(DomainCalendars, []byte(`{"destinations":{"team":{"inputs":[{"calendar":"focacal","kinds":["focus"]}],"target":{"calendar":"work"}}}}`))
+	view, err := svc.Patch(DomainCalendars, []byte(`{"destinations":{"team":{"inputs":[{"calendar":"focacal","kinds":["focus"]}],"target":{"calendar":"work"}}}}`), PatchOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -487,7 +484,7 @@ func TestNewServiceToleratesMissingFiles(t *testing.T) {
 			t.Errorf("Get(%s): %v", d, err)
 		}
 	}
-	if _, err := svc.Patch(DomainPlanner, []byte(`{"working_hours":{"timezone":"Europe/Berlin"}}`)); err != nil {
+	if _, err := svc.Patch(DomainPlanner, []byte(`{"working_hours":{"timezone":"Europe/Berlin"}}`), PatchOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	b, err := os.ReadFile(filepath.Join(dir, "planner.yaml"))
@@ -508,7 +505,7 @@ func TestGetUnknownDomain(t *testing.T) {
 	if _, err := svc.Get(Domain("bogus")); !errors.Is(err, ErrUnknownDomain) {
 		t.Errorf("Get: %v", err)
 	}
-	if _, err := svc.Patch(Domain("bogus"), []byte(`{}`)); !errors.Is(err, ErrUnknownDomain) {
+	if _, err := svc.Patch(Domain("bogus"), []byte(`{}`), PatchOptions{}); !errors.Is(err, ErrUnknownDomain) {
 		t.Errorf("Patch: %v", err)
 	}
 }
@@ -523,7 +520,7 @@ func TestPatchConcurrentNoLostUpdates(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			body := fmt.Sprintf(`{"colors":{"kind%d":"#%06d"}}`, i, i)
-			if _, err := svc.Patch(DomainPlanner, []byte(body)); err != nil {
+			if _, err := svc.Patch(DomainPlanner, []byte(body), PatchOptions{}); err != nil {
 				t.Error(err)
 			}
 		}()
@@ -622,7 +619,7 @@ func TestLoadReadsOnlyEachDomainsOwnKeys(t *testing.T) {
 		if len(before.Order["calendars"]) != 0 {
 			t.Fatalf("stray config.yaml calendars leaked into calendars: %v", before.Order["calendars"])
 		}
-		if _, err := svc.Patch(DomainCalendars, []byte(`{"calendars":{"c":{"url_env":"FOCACAL_C"}}}`)); err != nil {
+		if _, err := svc.Patch(DomainCalendars, []byte(`{"calendars":{"c":{"url_env":"FOCACAL_C"}}}`), PatchOptions{}); err != nil {
 			t.Fatal(err)
 		}
 		cfg, err := LoadDir(dir)
@@ -668,7 +665,7 @@ func TestPatchRestrictsReferences(t *testing.T) {
 	for _, body := range accepted {
 		t.Run("accept "+body, func(t *testing.T) {
 			svc, _ := newTestService(t, writeTestDir(t))
-			if _, err := svc.Patch(DomainCalendars, []byte(body)); err != nil {
+			if _, err := svc.Patch(DomainCalendars, []byte(body), PatchOptions{}); err != nil {
 				t.Fatalf("err = %v", err)
 			}
 		})
@@ -687,7 +684,7 @@ func TestPatchRestrictsReferences(t *testing.T) {
 			dir := writeTestDir(t)
 			svc, _ := newTestService(t, dir)
 			before := snapshotFiles(t, dir)
-			if _, err := svc.Patch(DomainCalendars, []byte(body)); !errors.Is(err, ErrValidation) {
+			if _, err := svc.Patch(DomainCalendars, []byte(body), PatchOptions{}); !errors.Is(err, ErrValidation) {
 				t.Fatalf("err = %v, want ErrValidation", err)
 			}
 			assertFilesUnchanged(t, dir, before)
@@ -705,13 +702,13 @@ func TestPatchAddThenDeleteDoesNotFlagRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v, err := svc.Patch(DomainCalendars, []byte(`{"calendars":{"c":{"url_env":"FOCACAL_C"}}}`)); err != nil || v.PendingRestart {
+	if v, err := svc.Patch(DomainCalendars, []byte(`{"calendars":{"c":{"url_env":"FOCACAL_C"}}}`), PatchOptions{}); err != nil || v.PendingRestart {
 		t.Fatalf("add: err %v pending %v", err, v.PendingRestart)
 	}
 	if len(live.Current().Sources) != 1 {
 		t.Errorf("running sources = %d, want 1", len(live.Current().Sources))
 	}
-	v, err := svc.Patch(DomainCalendars, []byte(`{"calendars":{"c":null}}`))
+	v, err := svc.Patch(DomainCalendars, []byte(`{"calendars":{"c":null}}`), PatchOptions{})
 	if err != nil || v.PendingRestart {
 		t.Fatalf("delete: err %v pending %v", err, v.PendingRestart)
 	}
@@ -725,7 +722,7 @@ func TestPatchAddThenDeleteDoesNotFlagRestart(t *testing.T) {
 func TestPatchColorKeysKeepCase(t *testing.T) {
 	dir := writeTestDir(t)
 	svc, _ := newTestService(t, dir)
-	v, err := svc.Patch(DomainPlanner, []byte(`{"colors":{"Meeting":"#ff0000","a.b":"#00ff00"}}`))
+	v, err := svc.Patch(DomainPlanner, []byte(`{"colors":{"Meeting":"#ff0000","a.b":"#00ff00"}}`), PatchOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -733,7 +730,7 @@ func TestPatchColorKeysKeepCase(t *testing.T) {
 	if cols["Meeting"] != "#ff0000" || cols["a.b"] != "#00ff00" {
 		t.Fatalf("colors = %v", cols)
 	}
-	if v, err = svc.Patch(DomainPlanner, []byte(`{"colors":{"Meeting":null,"a.b":null}}`)); err != nil {
+	if v, err = svc.Patch(DomainPlanner, []byte(`{"colors":{"Meeting":null,"a.b":null}}`), PatchOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	cols = obj(t, asMap(t, v), "values", "colors")
@@ -760,7 +757,7 @@ func TestPatchRejectsEmptyMapKey(t *testing.T) {
 			dir := writeTestDir(t)
 			svc, _ := newTestService(t, dir)
 			before := snapshotFiles(t, dir)
-			_, err := svc.Patch(DomainPlanner, []byte(body))
+			_, err := svc.Patch(DomainPlanner, []byte(body), PatchOptions{})
 			if !errors.Is(err, ErrBadRequest) {
 				t.Fatalf("err = %v, want ErrBadRequest", err)
 			}
@@ -791,7 +788,7 @@ func TestLegacyDisplayTimezoneIgnored(t *testing.T) {
 	if _, ok := v.Values["display_timezone"]; ok {
 		t.Error("view exposes display_timezone")
 	}
-	if _, err := svc.Patch(DomainPlanner, []byte(`{"working_hours":{"start":"08:00"}}`)); err != nil {
+	if _, err := svc.Patch(DomainPlanner, []byte(`{"working_hours":{"start":"08:00"}}`), PatchOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	b, _ := os.ReadFile(filepath.Join(dir, "planner.yaml"))
@@ -799,7 +796,7 @@ func TestLegacyDisplayTimezoneIgnored(t *testing.T) {
 	if strings.Contains(string(b), "display_timezone") {
 		t.Errorf("PATCH should drop the unknown display_timezone key:\n%s", b)
 	}
-	if _, err := svc.Patch(DomainPlanner, []byte(`{"display_timezone":"UTC"}`)); !errors.Is(err, ErrBadRequest) {
+	if _, err := svc.Patch(DomainPlanner, []byte(`{"display_timezone":"UTC"}`), PatchOptions{}); !errors.Is(err, ErrBadRequest) {
 		t.Errorf("patching display_timezone: err = %v, want ErrBadRequest", err)
 	}
 }
@@ -828,7 +825,7 @@ func TestDecodeErrorHidesValue(t *testing.T) {
 func TestPatchDropsComments(t *testing.T) {
 	dir := writeTestDir(t)
 	svc, _ := newTestService(t, dir)
-	if _, err := svc.Patch(DomainPlanner, []byte(`{"working_hours":{"end":"18:00"}}`)); err != nil {
+	if _, err := svc.Patch(DomainPlanner, []byte(`{"working_hours":{"end":"18:00"}}`), PatchOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	b, _ := os.ReadFile(filepath.Join(dir, "planner.yaml"))
@@ -850,7 +847,7 @@ func TestPatchOrderStable(t *testing.T) {
 	svc, _ := newTestService(t, dir)
 	want := []string{"work", "feed", "dav", "plain"}
 	for i := 0; i < 3; i++ {
-		view, err := svc.Patch(DomainCalendars, []byte(`{"calendars":{"feed":{"name":"Feed `+fmt.Sprint(i)+`"}}}`))
+		view, err := svc.Patch(DomainCalendars, []byte(`{"calendars":{"feed":{"name":"Feed `+fmt.Sprint(i)+`"}}}`), PatchOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -870,7 +867,7 @@ func TestPatchOrderStable(t *testing.T) {
 		t.Fatalf("on-disk order = %v", ids)
 	}
 	// A new item appends; existing positions are unchanged.
-	if _, err := svc.Patch(DomainCalendars, []byte(`{"calendars":{"aaa":{"url_env":"FOCACAL_X"}}}`)); err != nil {
+	if _, err := svc.Patch(DomainCalendars, []byte(`{"calendars":{"aaa":{"url_env":"FOCACAL_X"}}}`), PatchOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	cfg, _ = LoadDir(dir)
@@ -887,7 +884,7 @@ func TestPatchFailureLeavesFileByteIdentical(t *testing.T) {
 		`{"working_hours":{"start":"25:00"}}`,
 		`{"working_hours":{"start":"19:00"}}`,
 	} {
-		if _, err := svc.Patch(DomainPlanner, []byte(body)); !errors.Is(err, ErrValidation) {
+		if _, err := svc.Patch(DomainPlanner, []byte(body), PatchOptions{}); !errors.Is(err, ErrValidation) {
 			t.Fatalf("%s: err = %v", body, err)
 		}
 		assertFilesUnchanged(t, dir, before)
@@ -898,7 +895,7 @@ func TestPatchFailureLeavesFileByteIdentical(t *testing.T) {
 		t.Fatal(err)
 	}
 	before = snapshotFiles(t, dir)
-	if _, err := svc.Patch(DomainPlanner, []byte(`{"working_hours":{"end":"18:00"}}`)); err == nil {
+	if _, err := svc.Patch(DomainPlanner, []byte(`{"working_hours":{"end":"18:00"}}`), PatchOptions{}); err == nil {
 		t.Fatal("want error for a non-mapping file")
 	}
 	assertFilesUnchanged(t, dir, before)
@@ -943,10 +940,10 @@ func TestPatchKeepsInlineAPIKeys(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "planner.yaml"), []byte(pl), 0644)
 	svc, _ := newTestService(t, dir)
 
-	if _, err := svc.Patch(DomainApp, []byte(`{"server":{"rest_port":5240}}`)); err != nil {
+	if _, err := svc.Patch(DomainApp, []byte(`{"server":{"rest_port":5240}}`), PatchOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.Patch(DomainPlanner, []byte(`{"working_hours":{"end":"18:00"}}`)); err != nil {
+	if _, err := svc.Patch(DomainPlanner, []byte(`{"working_hours":{"end":"18:00"}}`), PatchOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	a, _ := os.ReadFile(filepath.Join(dir, "config.yaml"))
@@ -962,7 +959,7 @@ func TestPatchKeepsInlineAPIKeys(t *testing.T) {
 		{DomainApp, `{"auth":{"api_key":"n"}}`},
 		{DomainPlanner, `{"agent":{"api_key":"n"}}`},
 	} {
-		if _, err := svc.Patch(c.d, []byte(c.body)); err == nil {
+		if _, err := svc.Patch(c.d, []byte(c.body), PatchOptions{}); err == nil {
 			t.Errorf("%s: api_key patch accepted", c.body)
 		}
 	}
@@ -1007,5 +1004,111 @@ func TestMarshalDomainRoundTripAppPlanner(t *testing.T) {
 		if d == DomainApp && got.Auth != cfg.Auth || d == DomainPlanner && got.Agent != cfg.Agent {
 			t.Errorf("%s: secret fields lost", d)
 		}
+	}
+}
+
+func TestCreateGeneratesSlugID(t *testing.T) {
+	t.Setenv("FOCACAL_NEW", "https://x.example/a.ics")
+	dir := writeTestDir(t)
+	svc, _ := newTestService(t, dir)
+	create := func(body string) (string, View, error) { return svc.Create("calendars", []byte(body)) }
+
+	id, view, err := create(`{"name":"Work Calendar","url_env":"FOCACAL_NEW"}`)
+	if err != nil || id != "work-calendar" {
+		t.Fatalf("id = %q err = %v", id, err)
+	}
+	if _, ok := view.Values["calendars"].(map[string]any)["work-calendar"]; !ok {
+		t.Error("view lacks the new calendar")
+	}
+	if id, _, err = create(`{"name":"Work Calendar","url_env":"FOCACAL_NEW"}`); err != nil || id != "work-calendar-2" {
+		t.Errorf("second id = %q err = %v", id, err)
+	}
+	// Existing ids compare case-insensitively.
+	if id, _, err = create(`{"name":"WORK","url_env":"FOCACAL_NEW"}`); err != nil || id != "work-2" {
+		t.Errorf("WORK id = %q err = %v", id, err)
+	}
+	for _, name := range []string{"focacal", "日本語"} {
+		id, _, err := create(`{"name":"` + name + `","url_env":"FOCACAL_NEW"}`)
+		if err != nil || !ValidID(id) || id == "focacal" {
+			t.Errorf("name %q gave id %q err %v", name, id, err)
+		}
+	}
+	if _, _, err := create(`{"id":"mine","name":"X","url_env":"FOCACAL_NEW"}`); !errors.Is(err, ErrBadRequest) {
+		t.Errorf("body with id: %v", err)
+	}
+	for _, body := range []string{`{"url_env":"FOCACAL_NEW"}`, `{"name":"  ","url_env":"FOCACAL_NEW"}`} {
+		if _, _, err := create(body); !errors.Is(err, ErrValidation) {
+			t.Errorf("%s: %v", body, err)
+		}
+	}
+	if _, _, err := create(`{"name":"X","bogus":1}`); !errors.Is(err, ErrBadRequest) {
+		t.Errorf("unknown field: %v", err)
+	}
+	if _, _, err := create(`{"name":"X","url":"https://s.example/f.ics"}`); !errors.Is(err, ErrValidation) {
+		t.Errorf("inline secret: %v", err)
+	}
+	if _, _, err := create(`{"name":"X","account":"missing"}`); !errors.Is(err, ErrValidation) {
+		t.Errorf("dangling account: %v", err)
+	}
+	if _, _, err := svc.Create("oauth", []byte(`{"name":"x"}`)); !errors.Is(err, ErrBadRequest) {
+		t.Errorf("non-collection: %v", err)
+	}
+}
+
+func TestCreateAccountAndDestination(t *testing.T) {
+	dir := writeTestDir(t)
+	svc, _ := newTestService(t, dir)
+	id, _, err := svc.Create("accounts", []byte(`{"name":"Team DAV","type":"caldav","caldav_url":"https://t.example"}`))
+	if err != nil || id != "team-dav" {
+		t.Fatalf("account id = %q %v", id, err)
+	}
+	id, _, err = svc.Create("destinations", []byte(`{"name":"Out","inputs":"all","target":{"served":true}}`))
+	if err != nil || id != "out-2" {
+		t.Fatalf("destination id = %q %v (out exists)", id, err)
+	}
+}
+
+func TestPatchIDImmutable(t *testing.T) {
+	dir := writeTestDir(t)
+	svc, _ := newTestService(t, dir)
+	before := snapshotFiles(t, dir)
+	if _, err := svc.Patch(DomainCalendars, []byte(`{"calendars":{"work":{"id":"renamed"}}}`), PatchOptions{}); !errors.Is(err, ErrValidation) {
+		t.Fatalf("err = %v", err)
+	}
+	assertFilesUnchanged(t, dir, before)
+	if _, err := svc.Patch(DomainCalendars, []byte(`{"calendars":{"work":{"name":"Work Cal"}}}`), PatchOptions{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestViewsHideSecrets(t *testing.T) {
+	dir := writeTestDir(t)
+	svc, _ := newTestService(t, dir)
+	v, err := svc.Get(DomainCalendars)
+	if err != nil {
+		t.Fatal(err)
+	}
+	acc := v.Values["accounts"].(map[string]any)
+	dav := acc["dav-account"].(map[string]any)
+	if _, ok := dav["password"]; ok || dav["has_secret"] != true {
+		t.Errorf("dav-account = %v", dav)
+	}
+	if acc["plain-account"].(map[string]any)["has_secret"] != false {
+		t.Errorf("plain-account = %v", acc["plain-account"])
+	}
+	cals := v.Values["calendars"].(map[string]any)
+	feed := cals["feed"].(map[string]any)
+	if _, ok := feed["url"]; ok || feed["has_secret"] != true {
+		t.Errorf("feed = %v", feed)
+	}
+	out := v.Values["destinations"].(map[string]any)["out"].(map[string]any)
+	for _, k := range []string{"inputs", "target"} {
+		if _, ok := out[k]; !ok {
+			t.Errorf("destination view lacks %s: %v", k, out)
+		}
+	}
+	b, _ := json.Marshal(v)
+	if strings.Contains(string(b), "hunter2") || strings.Contains(string(b), "secret.example") {
+		t.Errorf("view leaks a secret: %s", b)
 	}
 }

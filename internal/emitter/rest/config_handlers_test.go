@@ -671,3 +671,83 @@ func TestPatchAppServerPortSetsPendingRestart(t *testing.T) {
 		t.Error("GET after server change: pending_restart = false")
 	}
 }
+
+func TestPostCreatesCalendarWithGeneratedID(t *testing.T) {
+	t.Setenv("FOCACAL_POST_FEED", "https://f.example/a.ics")
+	s, dir := newConfigTestServer(t)
+	rec := doReq(t, s, http.MethodPost, "/config/calendars/calendars", []byte(`{"name":"Team Feed","url_env":"FOCACAL_POST_FEED"}`))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("POST = %d %s", rec.Code, rec.Body)
+	}
+	var got struct {
+		ID   string `json:"id"`
+		View struct {
+			Values map[string]map[string]any `json:"values"`
+		} `json:"view"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != "team-feed" || got.View.Values["calendars"]["team-feed"] == nil {
+		t.Errorf("body = %s", rec.Body)
+	}
+	if !strings.Contains(readFile(t, filepath.Join(dir, "calendars.yaml")), "team-feed") {
+		t.Error("not written")
+	}
+	for _, tc := range []struct {
+		path, body string
+		want       int
+	}{
+		{"/config/calendars/calendars", `{"id":"x","name":"X"}`, http.StatusBadRequest},
+		{"/config/calendars/calendars", `{"url_env":"FOCACAL_POST_FEED"}`, http.StatusUnprocessableEntity},
+		{"/config/calendars/oauth", `{"name":"X"}`, http.StatusNotFound},
+	} {
+		if rec := doReq(t, s, http.MethodPost, tc.path, []byte(tc.body)); rec.Code != tc.want {
+			t.Errorf("POST %s %s = %d %s, want %d", tc.path, tc.body, rec.Code, rec.Body, tc.want)
+		}
+	}
+}
+
+func TestPostRequiresAuth(t *testing.T) {
+	s, dir := newConfigTestServer(t)
+	before := readFile(t, filepath.Join(dir, "calendars.yaml"))
+	req := httptest.NewRequest(http.MethodPost, "/config/calendars/calendars", strings.NewReader(`{"name":"X","url_env":"FOCACAL_X"}`))
+	rec := httptest.NewRecorder()
+	s.srv.Handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated POST = %d", rec.Code)
+	}
+	if readFile(t, filepath.Join(dir, "calendars.yaml")) != before {
+		t.Error("file changed")
+	}
+}
+
+func TestPatchDryRun(t *testing.T) {
+	s, dir := newConfigTestServer(t)
+	before := readFile(t, filepath.Join(dir, "calendars.yaml"))
+	rec := doReq(t, s, http.MethodPatch, "/config/calendars?dry_run=true", []byte(`{"accounts":{"dav":null}}`))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PATCH dry_run = %d %s", rec.Code, rec.Body)
+	}
+	var v struct {
+		Pruned []struct{ Kind, ID string } `json:"pruned"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &v); err != nil {
+		t.Fatal(err)
+	}
+	if len(v.Pruned) == 0 || v.Pruned[0].Kind != "calendar" || v.Pruned[0].ID != "davcal" {
+		t.Errorf("pruned = %+v", v.Pruned)
+	}
+	if readFile(t, filepath.Join(dir, "calendars.yaml")) != before {
+		t.Error("dry run wrote the file")
+	}
+	if rec := doReq(t, s, http.MethodPatch, "/config/calendars?dry_run=maybe", []byte(`{}`)); rec.Code != http.StatusBadRequest {
+		t.Errorf("bad dry_run = %d", rec.Code)
+	}
+	req := httptest.NewRequest(http.MethodPatch, "/config/calendars?dry_run=true", strings.NewReader(`{}`))
+	r2 := httptest.NewRecorder()
+	s.srv.Handler.ServeHTTP(r2, req)
+	if r2.Code != http.StatusUnauthorized {
+		t.Errorf("unauthenticated = %d", r2.Code)
+	}
+}

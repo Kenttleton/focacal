@@ -39,6 +39,15 @@ var secretFields = map[string]bool{
 	"session_token": true,
 }
 
+// PatchOptions tunes Patch.
+type PatchOptions struct{ DryRun bool }
+
+// Pruned names something a delete removed as a consequence.
+type Pruned struct {
+	Kind string `json:"kind"`
+	ID   string `json:"id"`
+}
+
 // View is what the API returns for one domain.
 type View struct {
 	// Values are the saved values (file contents over defaults; env vars are
@@ -55,6 +64,9 @@ type View struct {
 	// LoadError is the last reload failure (the running config is still the
 	// last good one), empty when the files loaded cleanly.
 	LoadError string `json:"load_error"`
+	// Pruned lists what a delete in this patch removed beyond the items it
+	// named.
+	Pruned []Pruned `json:"pruned,omitempty"`
 }
 
 // Service reads and patches the domain files of one config directory.
@@ -145,7 +157,12 @@ func (s *Service) Get(d Domain) (View, error) {
 // objects keyed by item id, with null deleting an item. The body is checked
 // against d's keys, the patched candidate is validated with d's validator,
 // and only then is the file written. On any error the file is untouched.
-func (s *Service) Patch(d Domain, body []byte) (View, error) {
+//
+// Deleting an account or calendar also prunes what referenced it (see
+// pruneCascade) in the same write; View.Pruned lists that. With
+// opts.DryRun everything runs except the write and the reload, so the view
+// and Pruned show what the patch would do.
+func (s *Service) Patch(d Domain, body []byte, opts PatchOptions) (View, error) {
 	if !d.Valid() {
 		return View{}, fmt.Errorf("%w: %q", ErrUnknownDomain, d)
 	}
@@ -162,12 +179,73 @@ func (s *Service) Patch(d Domain, body []byte) (View, error) {
 	if len(patch) == 0 {
 		return s.Get(d)
 	}
+	return s.update(d, opts, func(map[string]any) (map[string]any, error) { return patch, nil })
+}
 
+// Create adds one item to the accounts, calendars or destinations collection
+// of the calendars domain. body is the item without an id: the server derives
+// the id from name (Slug, made unique case-insensitively; "focacal" is
+// reserved among calendars). The request then takes the same validate-then-
+// write path as Patch.
+func (s *Service) Create(coll string, body []byte) (string, View, error) {
+	d := DomainCalendars
+	var dk *domainKey
+	for i, k := range domainKeys[d] {
+		if k.name == coll && k.collection != nil {
+			dk = &domainKeys[d][i]
+		}
+	}
+	if dk == nil {
+		return "", View{}, badRequestf("cannot create items in %q", coll)
+	}
+	item, err := decodePatch(body)
+	if err != nil {
+		return "", View{}, err
+	}
+	if _, has := item["id"]; has {
+		return "", View{}, badRequestf("id is assigned by the server; send name instead")
+	}
+	name, isStr := item["name"].(string)
+	if item["name"] != nil && !isStr {
+		return "", View{}, badRequestf("name: must be a string")
+	}
+	if strings.TrimSpace(name) == "" {
+		return "", View{}, validationf("%s: name is required", coll)
+	}
+	var id string
+	v, err := s.update(d, PatchOptions{}, func(doc map[string]any) (map[string]any, error) {
+		taken := map[string]bool{}
+		for existing := range collectionIDs(doc, d)[coll] {
+			taken[strings.ToLower(existing)] = true
+		}
+		id = UniqueID(name, func(c string) bool {
+			return taken[c] || (coll == "calendars" && c == "focacal")
+		})
+		patch := map[string]any{coll: map[string]any{id: item}}
+		if err := checkPatch(d, patch); err != nil {
+			return nil, err
+		}
+		return patch, nil
+	})
+	if err != nil {
+		return "", View{}, err
+	}
+	return id, v, nil
+}
+
+// errDryRun aborts Writer.Update after validation so nothing is written.
+var errDryRun = errors.New("dry run")
+
+// update is the shared write path of Patch and Create. prep receives the
+// current document (under the writer's lock) and returns the checked merge
+// patch to apply.
+func (s *Service) update(d Domain, opts PatchOptions, prep func(doc map[string]any) (map[string]any, error)) (View, error) {
 	var saved *Config
+	var pruned []Pruned
 	// The candidate is built inside Update, under the writer's lock, from the
 	// bytes that will be replaced, so a concurrent patch cannot slip in
 	// between validation and write. Returning an error leaves the file alone.
-	err = s.writers[d].Update(func(cur []byte) ([]byte, error) {
+	err := s.writers[d].Update(func(cur []byte) ([]byte, error) {
 		doc := map[string]any{}
 		if len(bytes.TrimSpace(cur)) > 0 {
 			if err := yaml.Unmarshal(cur, &doc); err != nil {
@@ -177,9 +255,26 @@ func (s *Service) Patch(d Domain, body []byte) (View, error) {
 				doc = map[string]any{} // comments only
 			}
 		}
+		patch, err := prep(doc)
+		if err != nil {
+			return nil, err
+		}
 		before := collectionIDs(doc, d)
 		if err := ApplyMergePatch(doc, patch, d.collections()); err != nil {
 			return nil, fmt.Errorf("apply patch to %s: %w", d.File(), err)
+		}
+		if d == DomainCalendars {
+			after := collectionIDs(doc, d)
+			deleted := map[string][]string{}
+			for _, coll := range []string{"accounts", "calendars"} {
+				for id := range before[coll] {
+					if !after[coll][id] {
+						deleted[coll] = append(deleted[coll], id)
+					}
+				}
+				slices.Sort(deleted[coll])
+			}
+			pruned = pruneCascade(doc, deleted)
 		}
 		if err := checkNewIDs(doc, before, d); err != nil {
 			return nil, err
@@ -212,9 +307,12 @@ func (s *Service) Patch(d Domain, body []byte) (View, error) {
 			return nil, err
 		}
 		saved = cfg
+		if opts.DryRun {
+			return nil, errDryRun
+		}
 		return out, nil
 	})
-	if err != nil {
+	if err != nil && !errors.Is(err, errDryRun) {
 		return View{}, err
 	}
 	// The returned view is the saved candidate, not the running config.
@@ -223,10 +321,15 @@ func (s *Service) Patch(d Domain, body []byte) (View, error) {
 	// and valid for d, so the error means something outside this request
 	// (env, another domain, cross-domain validation) blocks the reload. It
 	// is logged by Live and reported through View.LoadError.
-	if s.live != nil {
+	if s.live != nil && !opts.DryRun {
 		_, _ = s.live.Reload()
 	}
-	return s.view(d, saved)
+	v, err := s.view(d, saved)
+	if err != nil {
+		return View{}, err
+	}
+	v.Pruned = pruned
+	return v, nil
 }
 
 // collectionIDs returns the ids of every collection of d present in doc.
@@ -332,13 +435,13 @@ func (s *Service) view(d Domain, cfg *Config) (View, error) {
 				func(m map[string]any, a AccountConfig) {
 					delete(m, "password")
 					redactURLFields(m)
-					m["has_secret"] = a.Password != "" || a.CredentialsFile != "" || hasUserinfo(a.CalDAVURL)
+					m["has_secret"] = accountHasSecret(a)
 				})
 		case "calendars":
 			v.Values[dk.name], v.Order[dk.name], err = collectionView(cfg.Calendars, func(c CalendarConfig) string { return c.ID },
 				func(m map[string]any, c CalendarConfig) {
 					delete(m, "url")
-					m["has_secret"] = c.URL != "" || c.URLEnv != ""
+					m["has_secret"] = calendarHasSecret(c)
 				})
 		case "destinations":
 			v.Values[dk.name], v.Order[dk.name], err = collectionView(cfg.Destinations, func(d DestinationConfig) string { return d.ID }, nil)
@@ -383,14 +486,17 @@ func jsonObject(v any) (map[string]any, error) {
 	return m, nil
 }
 
-// hasSecret reports whether a source has a credential configured, inline or
-// by reference: an inline password or ics_url, an ics_url_env reference, or
-// a credentials_file (OAuth client credentials). token_file is runtime state
+// accountHasSecret reports whether an account has a credential configured,
+// inline or by reference: an inline password, a credentials_file (OAuth
+// client credentials) or userinfo in caldav_url. token_file is runtime state
 // and does not count.
-func hasSecret(s SourceConfig) bool {
-	_, userinfo := stripUserinfo(s.CalDAVURL)
-	return s.Password != "" || s.ICSURL != "" || s.ICSURLEnv != "" || s.CredentialsFile != "" || userinfo
+func accountHasSecret(a AccountConfig) bool {
+	return a.Password != "" || a.CredentialsFile != "" || hasUserinfo(a.CalDAVURL)
 }
+
+// calendarHasSecret reports whether a calendar is an ICS feed, whose URL
+// (inline or by env reference) is a secret.
+func calendarHasSecret(c CalendarConfig) bool { return c.URL != "" || c.URLEnv != "" }
 
 // stripUserinfo removes a "user:password@" part from a URL's authority and
 // reports whether there was one. It works on the raw string so a URL that
@@ -509,23 +615,22 @@ func checkItem(coll, id string, e any, dk domainKey) error {
 	path := coll + "." + id
 	spec := dk.collection
 	identity := spec.Identity(id)
+	// A null deletes the item. It comes first so an existing id that
+	// would not be accepted for a new item (hand-written, with ":" or "|")
+	// can still be deleted. Creating such an id stays rejected: by the
+	// shape checks below and by ValidID in checkNewIDs.
+	if e == nil {
+		return nil
+	}
 	if id == "" || spec.Key(identity) != id {
 		return validationf("%s: invalid id %q", coll, id)
 	}
-	// "|" separates id and calendar_id in destination keys, so it cannot
-	// appear inside either (or in a source id a destination refers to).
+	// "|" and ":" are separators in runtime keys (sync_state rows are
+	// "<id>:<calendar>"), so they cannot appear in a new id.
 	for _, f := range sortedKeys(identity) {
-		if strings.Contains(str(identity[f]), "|") {
-			return validationf("%s: %s must not contain \"|\"", path, f)
+		if strings.ContainsAny(str(identity[f]), "|:") {
+			return validationf("%s: %s must not contain \"|\" or \":\"", path, f)
 		}
-	}
-	// ":" separates a source id from a calendar id in sync_state keys, so a
-	// source id with one would collide with "<id>:<calendar>" rows of another.
-	if strings.Contains(str(identity["id"]), ":") {
-		return validationf("%s: id must not contain \":\"", path)
-	}
-	if e == nil {
-		return nil
 	}
 	item, ok := e.(map[string]any)
 	if !ok {

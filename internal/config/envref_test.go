@@ -71,16 +71,16 @@ func TestICSSourceNeedsAReference(t *testing.T) {
 func TestPatchWithUnresolvedEnvRefPresent(t *testing.T) {
 	dir := writeUnresolvedDir(t)
 	svc, _ := newTestService(t, dir)
-	if _, err := svc.Patch(DomainCalendars, []byte(`{"calendars":{"work":{"name":"Work"}}}`)); err != nil {
+	if _, err := svc.Patch(DomainCalendars, []byte(`{"calendars":{"work":{"name":"Work"}}}`), PatchOptions{}); err != nil {
 		t.Fatalf("unrelated PATCH failed: %v", err)
 	}
 	// A new source referencing a variable that is not set yet is accepted:
 	// the user may add it to .env and restart afterwards.
-	if _, err := svc.Patch(DomainCalendars, []byte(`{"calendars":{"later":{"url_env":"FOCACAL_TEST_UNSET_LATER"}}}`)); err != nil {
+	if _, err := svc.Patch(DomainCalendars, []byte(`{"calendars":{"later":{"url_env":"FOCACAL_TEST_UNSET_LATER"}}}`), PatchOptions{}); err != nil {
 		t.Fatalf("new source with an unset env ref: %v", err)
 	}
 	// Neither a reference nor an inline URL is still invalid.
-	if _, err := svc.Patch(DomainCalendars, []byte(`{"calendars":{"bare":{"name":"Bare"}}}`)); !errors.Is(err, ErrValidation) {
+	if _, err := svc.Patch(DomainCalendars, []byte(`{"calendars":{"bare":{"name":"Bare"}}}`), PatchOptions{}); !errors.Is(err, ErrValidation) {
 		t.Fatalf("ics source without reference: err = %v, want ErrValidation", err)
 	}
 }
@@ -108,7 +108,7 @@ func TestPatchRejectsPipeInIDs(t *testing.T) {
 			dir := writeTestDir(t)
 			svc, _ := newTestService(t, dir)
 			before := snapshotFiles(t, dir)
-			if _, err := svc.Patch(DomainCalendars, []byte(body)); !errors.Is(err, ErrValidation) {
+			if _, err := svc.Patch(DomainCalendars, []byte(body), PatchOptions{}); !errors.Is(err, ErrValidation) {
 				t.Fatalf("err = %v, want ErrValidation", err)
 			}
 			assertFilesUnchanged(t, dir, before)
@@ -142,7 +142,7 @@ func TestCalDAVURLUserinfoIsASecret(t *testing.T) {
 		`{"accounts":{"dav":{"caldav_url":"https://me:NEWPW@dav.example/"}}}`,
 		`{"accounts":{"dav":{"caldav_url":"https://me@dav.example/"}}}`,
 	} {
-		_, err := svc.Patch(DomainCalendars, []byte(p))
+		_, err := svc.Patch(DomainCalendars, []byte(p), PatchOptions{})
 		if !errors.Is(err, ErrValidation) {
 			t.Fatalf("%s: err = %v, want ErrValidation", p, err)
 		}
@@ -151,7 +151,7 @@ func TestCalDAVURLUserinfoIsASecret(t *testing.T) {
 		}
 	}
 	assertFilesUnchanged(t, dir, before)
-	if _, err := svc.Patch(DomainCalendars, []byte(`{"accounts":{"dav":{"caldav_url":"https://dav.example/new/"}}}`)); err != nil {
+	if _, err := svc.Patch(DomainCalendars, []byte(`{"accounts":{"dav":{"caldav_url":"https://dav.example/new/"}}}`), PatchOptions{}); err != nil {
 		t.Errorf("plain caldav_url: %v", err)
 	}
 }

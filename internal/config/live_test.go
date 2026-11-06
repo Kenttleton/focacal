@@ -234,7 +234,7 @@ func TestServicePatchReloadsSynchronously(t *testing.T) {
 	svc, _ := NewService(dir, l)
 	n := 0
 	l.OnChange(func(_, _ *Config) { n++ })
-	if _, err := svc.Patch(DomainPlanner, []byte(`{"working_hours":{"end":"18:00"}}`)); err != nil {
+	if _, err := svc.Patch(DomainPlanner, []byte(`{"working_hours":{"end":"18:00"}}`), PatchOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	if n != 1 || l.Current().WorkingHours.End != "18:00" {
@@ -426,7 +426,7 @@ func TestPatchRefusesWhenFileNoLongerParses(t *testing.T) {
 	svc, _ := NewService(dir, l)
 	writeFile(t, dir, "planner.yaml", "working_hours: [")
 	before := snapshotFiles(t, dir)
-	if _, err := svc.Patch(DomainPlanner, []byte(`{"working_hours":{"end":"18:00"}}`)); err == nil {
+	if _, err := svc.Patch(DomainPlanner, []byte(`{"working_hours":{"end":"18:00"}}`), PatchOptions{}); err == nil {
 		t.Fatal("Patch should fail")
 	}
 	assertFilesUnchanged(t, dir, before)

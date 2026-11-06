@@ -119,6 +119,8 @@ func New(connectors *connector.Registry, health *HealthState, addr string, log *
 	// (app, planner, calendars). See config_handlers.go.
 	r.Get("/config/{domain}", s.handleGetConfigDomain)
 	r.Patch("/config/{domain}", s.handlePatchConfigDomain)
+	// Create an account, calendar or destination; the server assigns the id.
+	r.Post("/config/calendars/{collection}", s.handleCreateConfigItem)
 
 	// Webcal / ICS feed — next 14 days of events and blocks.
 	// Subscribe in any calendar app with: webcal://host:5233/calendar.ics

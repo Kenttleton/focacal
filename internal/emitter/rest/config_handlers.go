@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -53,12 +54,56 @@ func (s *Server) handlePatchConfigDomain(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, "could not read request body")
 		return
 	}
-	view, err := s.configSvc.Patch(d, body)
+	var opts config.PatchOptions
+	if q := r.URL.Query().Get("dry_run"); q != "" {
+		dry, err := strconv.ParseBool(q)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "dry_run must be true or false")
+			return
+		}
+		opts.DryRun = dry
+	}
+	view, err := s.configSvc.Patch(d, body, opts)
 	if err != nil {
 		s.writeConfigError(w, r, d, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, view)
+}
+
+// handleCreateConfigItem serves POST /config/calendars/{collection}: it adds
+// one account, calendar or destination. The body has no id; the server
+// derives it from name and returns {"id", "view"} with 201.
+func (s *Server) handleCreateConfigItem(w http.ResponseWriter, r *http.Request) {
+	if s.configSvc == nil {
+		writeError(w, http.StatusServiceUnavailable, "config service unavailable")
+		return
+	}
+	coll := chi.URLParam(r, "collection")
+	switch coll {
+	case "accounts", "calendars", "destinations":
+	default:
+		writeError(w, http.StatusNotFound, "unknown collection; use accounts, calendars or destinations")
+		return
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxConfigBody))
+	if err != nil {
+		if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
+			writeError(w, http.StatusRequestEntityTooLarge, "request body exceeds 1 MiB")
+			return
+		}
+		writeError(w, http.StatusBadRequest, "could not read request body")
+		return
+	}
+	id, view, err := s.configSvc.Create(coll, body)
+	if err != nil {
+		s.writeConfigError(w, r, config.DomainCalendars, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, struct {
+		ID   string      `json:"id"`
+		View config.View `json:"view"`
+	}{id, view})
 }
 
 // writeConfigError maps Service errors to status codes. Bad-request and

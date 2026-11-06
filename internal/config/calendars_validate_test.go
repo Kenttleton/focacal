@@ -265,7 +265,7 @@ func TestDanglingReferencesRejectedByPatch(t *testing.T) {
 		"target":           `{"destinations":{"d2":{"inputs":"all","target":{"calendar":"ghost"}}}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, err := svc.Patch(DomainCalendars, []byte(body))
+			_, err := svc.Patch(DomainCalendars, []byte(body), PatchOptions{})
 			if !errors.Is(err, ErrValidation) || !strings.Contains(err.Error(), "ghost") {
 				t.Fatalf("err = %v, want ErrValidation naming ghost", err)
 			}
@@ -379,16 +379,16 @@ func TestNonConformingIDsLoadButCannotBeCreated(t *testing.T) {
 		`{"calendars":{"Fresh":{"url_env":"FOCACAL_F"}}}`,
 		`{"calendars":{"x:y":{"url_env":"FOCACAL_F"}}}`,
 	} {
-		if _, err := svc.Patch(DomainCalendars, []byte(p)); !errors.Is(err, ErrValidation) {
+		if _, err := svc.Patch(DomainCalendars, []byte(p), PatchOptions{}); !errors.Is(err, ErrValidation) {
 			t.Errorf("%s: err = %v, want ErrValidation", p, err)
 		}
 	}
 	assertFilesUnchanged(t, dir, before)
 	// An unrelated edit to a file holding the odd ids succeeds and keeps them.
-	if _, err := svc.Patch(DomainCalendars, []byte(`{"calendars":{"ok-new":{"url_env":"FOCACAL_OK"}}}`)); err != nil {
+	if _, err := svc.Patch(DomainCalendars, []byte(`{"calendars":{"ok-new":{"url_env":"FOCACAL_OK"}}}`), PatchOptions{}); err != nil {
 		t.Fatalf("unrelated create: %v", err)
 	}
-	if _, err := svc.Patch(DomainCalendars, []byte(`{"calendars":{"Work":{"name":"Renamed"}}}`)); err != nil {
+	if _, err := svc.Patch(DomainCalendars, []byte(`{"calendars":{"Work":{"name":"Renamed"}}}`), PatchOptions{}); err != nil {
 		t.Fatalf("edit of an existing odd id: %v", err)
 	}
 	b, _ := os.ReadFile(filepath.Join(dir, "calendars.yaml"))
