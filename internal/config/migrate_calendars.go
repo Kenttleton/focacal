@@ -107,6 +107,15 @@ func MigrateCalendarModelLog(dir string, log *slog.Logger) (migrated bool, err e
 		}
 	}
 
+	seen := map[string]bool{}
+	for _, s := range sources {
+		k := strings.ToLower(s.ID)
+		if seen[k] {
+			return false, fmt.Errorf("migrate: %s: source id %q appears more than once; nothing was changed. Rename or remove one and restart", file, s.ID)
+		}
+		seen[k] = true
+	}
+
 	m := newCalendarMigration(log)
 	for _, s := range sources {
 		m.reserve(s)
@@ -117,7 +126,6 @@ func MigrateCalendarModelLog(dir string, log *slog.Logger) (migrated bool, err e
 	for _, d := range dests {
 		m.addDestination(d)
 	}
-	m.fillInputs(sources)
 	m.addDefaultDestination()
 
 	if err := m.rewrite(&doc, root, si); err != nil {
@@ -158,8 +166,6 @@ type calendarMigration struct {
 	// byCalendars maps an old source id to its calendars in order.
 	bySource map[string][]CalendarConfig
 	icsIDs   map[string]bool
-	// needInputs indexes destinations that listed no sources; see fillInputs.
-	needInputs []int
 }
 
 func newCalendarMigration(log *slog.Logger) *calendarMigration {
@@ -301,6 +307,7 @@ func (m *calendarMigration) addDestination(d legacyDestination) {
 	dest := DestinationConfig{ID: d.ID, Name: d.ID, Target: DestinationTarget{Calendar: target}}
 	if m.destIDs[strings.ToLower(dest.ID)] {
 		dest.ID = UniqueID(d.ID, func(c string) bool { return m.destIDs[strings.ToLower(c)] })
+		m.log.Warn("migrate: legacy destination id is a duplicate and was renamed", "destination", d.ID)
 	}
 	m.destIDs[strings.ToLower(dest.ID)] = true
 	for _, in := range d.Sources {
@@ -315,32 +322,19 @@ func (m *calendarMigration) addDestination(d legacyDestination) {
 		}
 		if cal == target {
 			// A destination that reads the calendar it writes is a cycle.
+			m.log.Warn("migrate: legacy destination input that names the destination's own target was dropped", "destination", d.ID)
 			continue
 		}
 		dest.Inputs.Items = append(dest.Inputs.Items, DestinationInput{Calendar: cal, Event: in.Event})
 	}
 	if len(dest.Inputs.Items) == 0 {
-		m.needInputs = append(m.needInputs, len(m.destinations))
+		// Least privilege: never widen to source calendars the user did not list.
+		if len(d.Sources) > 0 {
+			m.log.Warn("migrate: every input of a legacy destination was dropped; it now takes only focacal", "destination", d.ID)
+		}
+		dest.Inputs.Items = []DestinationInput{{Calendar: "focacal"}}
 	}
 	m.destinations = append(m.destinations, dest)
-}
-
-// fillInputs gives destinations that listed no sources every calendar read
-// from a source, plus focacal. They are listed rather than written as "all"
-// because "all" also covers the calendars other destinations write to, and two
-// such destinations would feed each other (a cycle).
-func (m *calendarMigration) fillInputs(sources []legacySource) {
-	for _, i := range m.needInputs {
-		d := &m.destinations[i]
-		for _, s := range sources {
-			for _, c := range m.bySource[s.ID] {
-				if c.ID != d.Target.Calendar {
-					d.Inputs.Items = append(d.Inputs.Items, DestinationInput{Calendar: c.ID})
-				}
-			}
-		}
-		d.Inputs.Items = append(d.Inputs.Items, DestinationInput{Calendar: "focacal"})
-	}
 }
 
 func (m *calendarMigration) dropDestination(id string) {

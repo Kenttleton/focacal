@@ -415,7 +415,7 @@ func TestMigrateWriteFailureKeepsOriginal(t *testing.T) {
 	}
 }
 
-func TestMigrateRenameFailureKeepsOriginal(t *testing.T) {
+func TestMigrateRenameFailureFallsBackInPlace(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "calendars.yaml")
 	body := "sources:\n  - id: work\n    type: google\n"
@@ -423,6 +423,7 @@ func TestMigrateRenameFailureKeepsOriginal(t *testing.T) {
 	old := renameFile
 	renameFile = func(a, b string) error { return os.ErrPermission }
 	defer func() { renameFile = old }()
+	// Asserts the fallback: the writer rewrites in place and keeps the .bak.
 	// The writer falls back to an in-place rewrite, so this still succeeds
 	// and yields a loadable file.
 	if _, err := MigrateCalendarModel(dir); err != nil {
@@ -439,5 +440,162 @@ func TestMigratePreChangeExampleCalendars(t *testing.T) {
 	cfg := loadCal(t, dir)
 	if calByID(cfg, "work-google") == nil || accByID(cfg, "work-google") == nil || destByID(cfg, "focacal") == nil {
 		t.Errorf("accounts=%+v calendars=%+v destinations=%+v", cfg.Accounts, cfg.Calendars, cfg.Destinations)
+	}
+}
+
+func destInputs(t *testing.T, cfg *Config, id string) []DestinationInput {
+	t.Helper()
+	d := destByID(cfg, id)
+	if d == nil {
+		t.Fatalf("destination %s missing: %+v", id, cfg.Destinations)
+	}
+	if d.Inputs.All {
+		t.Errorf("destination %s has inputs: all", id)
+	}
+	return d.Inputs.Items
+}
+
+func onlyFocacal(in []DestinationInput) bool { return len(in) == 1 && in[0].Calendar == "focacal" }
+
+func TestMigrateDestinationOnlySelfInputGetsFocacalOnly(t *testing.T) {
+	dir, warns, _ := migrateCal(t, `sources:
+  - id: work-google
+    type: google
+  - id: other
+    type: google
+destinations:
+  - id: work-google
+    calendar_id: primary
+    sources:
+      - id: work-google
+`)
+	cfg := loadCal(t, dir)
+	if in := destInputs(t, cfg, "work-google"); !onlyFocacal(in) {
+		t.Errorf("inputs = %+v, want only focacal", in)
+	}
+	if !strings.Contains(warns, "destination=work-google") {
+		t.Errorf("warnings = %q", warns)
+	}
+}
+
+func TestMigrateDestinationUnknownSourcesGetFocacalOnly(t *testing.T) {
+	dir, warns, _ := migrateCal(t, `sources:
+  - id: work
+    type: google
+destinations:
+  - id: out
+    type: google
+    sources:
+      - id: nope
+      - id: nada
+`)
+	cfg := loadCal(t, dir)
+	if in := destInputs(t, cfg, "out"); !onlyFocacal(in) {
+		t.Errorf("inputs = %+v", in)
+	}
+	if !strings.Contains(warns, "destination=out") || strings.Contains(warns, "nope") {
+		t.Errorf("warnings = %q", warns)
+	}
+}
+
+func TestMigrateDestinationEmptySourcesGetFocacalOnly(t *testing.T) {
+	dir, _, _ := migrateCal(t, `sources:
+  - id: work
+    type: google
+destinations:
+  - id: out
+    type: google
+  - id: out2
+    type: outlook
+    sources: []
+`)
+	cfg := loadCal(t, dir)
+	for _, id := range []string{"out", "out2"} {
+		if in := destInputs(t, cfg, id); !onlyFocacal(in) {
+			t.Errorf("%s inputs = %+v", id, in)
+		}
+	}
+}
+
+func TestMigrateDestinationKeepsSurvivingInputs(t *testing.T) {
+	dir, _, _ := migrateCal(t, `sources:
+  - id: a
+    type: google
+  - id: b
+    type: google
+destinations:
+  - id: out
+    type: google
+    sources: [{id: a}, {id: gone}]
+`)
+	in := destInputs(t, loadCal(t, dir), "out")
+	if len(in) != 1 || in[0].Calendar != "a" {
+		t.Errorf("inputs = %+v", in)
+	}
+}
+
+func TestMigrateDuplicateDestinationIDWarns(t *testing.T) {
+	dir, warns, _ := migrateCal(t, `sources:
+  - id: work
+    type: google
+destinations:
+  - id: out
+    type: google
+  - id: out
+    type: outlook
+`)
+	cfg := loadCal(t, dir)
+	if destByID(cfg, "out") == nil || destByID(cfg, "out-2") == nil {
+		t.Errorf("destinations = %+v", cfg.Destinations)
+	}
+	if !strings.Contains(warns, "duplicate") || !strings.Contains(warns, "destination=out") {
+		t.Errorf("warnings = %q", warns)
+	}
+}
+
+// An empty sources list converts to no calendars plus the default destination.
+func TestMigrateEmptySourcesList(t *testing.T) {
+	dir, _, migrated := migrateCal(t, "sources: []\n")
+	if !migrated {
+		t.Fatal("not migrated")
+	}
+	cfg := loadCal(t, dir)
+	if len(cfg.Calendars) != 0 || destByID(cfg, "focacal") == nil {
+		t.Errorf("calendars=%+v destinations=%+v", cfg.Calendars, cfg.Destinations)
+	}
+}
+
+// An empty file and a comments-only file are left alone (nothing to migrate).
+func TestMigrateEmptyAndCommentsOnlyFiles(t *testing.T) {
+	for name, body := range map[string]string{"empty": "", "comments": "# nothing here\n# at all\n"} {
+		dir, _, migrated := migrateCal(t, body)
+		if migrated {
+			t.Errorf("%s: migrated", name)
+		}
+		if _, err := os.Stat(filepath.Join(dir, "calendars.yaml.bak")); err == nil {
+			t.Errorf("%s: wrote a .bak", name)
+		}
+		if readFile(t, filepath.Join(dir, "calendars.yaml")) != body {
+			t.Errorf("%s: file changed", name)
+		}
+	}
+}
+
+// Duplicate source ids (case-insensitive) are an error naming the id, and the
+// file is untouched.
+func TestMigrateDuplicateSourceIDErrors(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "calendars.yaml")
+	body := "sources:\n  - id: work\n    type: google\n  - id: Work\n    type: outlook\n"
+	os.WriteFile(p, []byte(body), 0644)
+	migrated, err := MigrateCalendarModel(dir)
+	if err == nil || migrated || !strings.Contains(err.Error(), `"Work"`) {
+		t.Fatalf("got %v, %v", migrated, err)
+	}
+	if readFile(t, p) != body {
+		t.Error("file changed")
+	}
+	if _, err := os.Stat(p + ".bak"); err == nil {
+		t.Error(".bak written")
 	}
 }
