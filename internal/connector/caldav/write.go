@@ -21,9 +21,12 @@ func (c *Connector) ValidateWebhook(_ context.Context, _ []byte, _ map[string]st
 }
 
 // WriteEvent creates or updates an event on the CalDAV server.
-// e.RemoteID should be the full object path on the server (returned by a
-// previous WriteEvent call). If empty, a new path is constructed from the
-// first configured calendar and the event UID.
+//
+// The remote id is the event's iCalendar UID, which is exactly what Sync
+// stores as store.Event.UID, so the write ledger can recognize the event when
+// it is read back. e.RemoteID is the UID returned by a previous WriteEvent
+// (empty creates a new event with a generated UID); the object path is derived
+// from the calendar and the UID.
 func (c *Connector) WriteEvent(ctx context.Context, e *connector.RemoteEvent) (string, error) {
 	client, err := c.caldavClient()
 	if err != nil {
@@ -45,6 +48,7 @@ func (c *Connector) WriteEvent(ctx context.Context, e *connector.RemoteEvent) (s
 	}
 
 	event.Props.SetText(ical.PropUID, uid)
+	event.Props.SetDateTime(ical.PropDateTimeStamp, time.Now().UTC())
 	event.Props.SetText(ical.PropSummary, e.Title)
 	event.Props.SetText(ical.PropDescription, e.Description)
 	event.Props.SetText(ical.PropLocation, e.Location)
@@ -64,33 +68,44 @@ func (c *Connector) WriteEvent(ctx context.Context, e *connector.RemoteEvent) (s
 
 	cal.Children = append(cal.Children, event.Component)
 
-	// Determine the object path.
-	objectPath := e.RemoteID
-	if objectPath == "" || !strings.HasSuffix(objectPath, ".ics") {
-		// Construct path from calendar home + uid.
-		calPath, pathErr := c.defaultCalendarPath(ctx)
-		if pathErr != nil {
-			return "", pathErr
-		}
-		objectPath = calPath + url.PathEscape(uid) + ".ics"
-	}
-
-	obj, err := client.PutCalendarObject(ctx, objectPath, cal)
+	objectPath, err := c.objectPath(ctx, uid)
 	if err != nil {
+		return "", err
+	}
+	if _, err := client.PutCalendarObject(ctx, objectPath, cal); err != nil {
 		return "", fmt.Errorf("put calendar object: %w", err)
 	}
-	return obj.Path, nil
+	return uid, nil
 }
 
-// DeleteEvent removes an event from the CalDAV server.
-// remoteID must be the full object path returned by WriteEvent.
+// objectPath is the object path of the event with the given UID in the
+// source's calendar.
+func (c *Connector) objectPath(ctx context.Context, uid string) (string, error) {
+	calPath, err := c.defaultCalendarPath(ctx)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSuffix(calPath, "/") + "/" + url.PathEscape(uid) + ".ics", nil
+}
+
+// DeleteEvent removes an event from the CalDAV server. remoteID is the UID
+// returned by WriteEvent.
 func (c *Connector) DeleteEvent(ctx context.Context, remoteID string) error {
 	client, err := c.caldavClient()
 	if err != nil {
 		return err
 	}
+	objectPath, err := c.objectPath(ctx, remoteID)
+	if err != nil {
+		return err
+	}
 	// caldav.Client embeds webdav.Client which has RemoveAll.
-	if err := client.RemoveAll(ctx, remoteID); err != nil {
+	if err := client.RemoveAll(ctx, objectPath); err != nil {
+		// go-webdav's HTTP error type is internal; its text starts with the
+		// status ("404 Not Found"). A missing object is already deleted.
+		if strings.HasPrefix(err.Error(), "404 ") {
+			return nil
+		}
 		return fmt.Errorf("delete calendar object %q: %w", remoteID, err)
 	}
 	return nil

@@ -95,6 +95,9 @@ func (c *Connector) WriteEvent(ctx context.Context, e *connector.RemoteEvent) (s
 		calID = c.cfg.CalendarIDs[0]
 	}
 
+	start, _ := e.Start.(time.Time)
+	end, _ := e.End.(time.Time)
+
 	showAs := "busy"
 	if e.ShowAs != "" {
 		showAs = e.ShowAs
@@ -104,8 +107,8 @@ func (c *Connector) WriteEvent(ctx context.Context, e *connector.RemoteEvent) (s
 		"summary":     e.Title,
 		"description": e.Description,
 		"location":    e.Location,
-		"start":       map[string]string{"dateTime": fmt.Sprintf("%v", e.Start), "timeZone": "UTC"},
-		"end":         map[string]string{"dateTime": fmt.Sprintf("%v", e.End), "timeZone": "UTC"},
+		"start":       map[string]string{"dateTime": start.UTC().Format(time.RFC3339), "timeZone": "UTC"},
+		"end":         map[string]string{"dateTime": end.UTC().Format(time.RFC3339), "timeZone": "UTC"},
 		"transparency": func() string {
 			if showAs == "free" {
 				return "transparent"

@@ -452,6 +452,11 @@ func TestPlainRemovePurgesEventsAndSyncState(t *testing.T) {
 	if err := db.SetOAuthToken(ctx, "a", "{}"); err != nil {
 		t.Fatal(err)
 	}
+	for _, c := range []string{"a", "b"} {
+		if err := db.LedgerPut(ctx, store.LedgerEntry{CalendarID: c, RemoteID: "r", DestinationID: "d", ItemKey: c, Hash: "h"}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	reg := connector.NewRegistry()
 	cfg := cfgWith(config.SourceConfig{ID: "a", Type: "ics"}, config.SourceConfig{ID: "b", Type: "ics"})
 	build, _ := fakeBuild()
@@ -464,6 +469,12 @@ func TestPlainRemovePurgesEventsAndSyncState(t *testing.T) {
 	}
 	if got := eventCount(t, db); got != 1 {
 		t.Fatalf("events = %d, want only b's", got)
+	}
+	if _, ok, _ := db.LedgerGet(ctx, "a", "r"); ok {
+		t.Fatal("removed calendar left a ledger row")
+	}
+	if _, ok, _ := db.LedgerGet(ctx, "b", "r"); !ok {
+		t.Fatal("purge removed another calendar's ledger row")
 	}
 	states, _ := db.ListSyncStates(ctx)
 	var ids []string

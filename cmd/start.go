@@ -21,6 +21,7 @@ import (
 	googleconn "github.com/Kenttleton/focacal/internal/connector/google"
 	icsconn "github.com/Kenttleton/focacal/internal/connector/ics"
 	outlookconn "github.com/Kenttleton/focacal/internal/connector/outlook"
+	"github.com/Kenttleton/focacal/internal/destination"
 	"github.com/Kenttleton/focacal/internal/emitter/caldav"
 	"github.com/Kenttleton/focacal/internal/emitter/rest"
 	"github.com/Kenttleton/focacal/internal/mcp"
@@ -139,6 +140,29 @@ func runStart(_ *cobra.Command, _ []string) error {
 					log.Error("emitter notify failed", "err", err)
 				}
 			}
+		}
+	})
+
+	// Push destinations: a second subscriber, run after the one above in
+	// registration order. It writes each calendar-target destination's
+	// projection to its calendar when blocks or calendars changed. It never
+	// calls live.Reload, and a panic is recovered so it cannot take the bus
+	// goroutine down. Writes take the registry's per-calendar lock.
+	pusher := destination.NewPusher(live, reg.Get, reg.LockSource, db, log)
+	b.Subscribe(func(msg bus.Message) {
+		if msg.Type != bus.EventBlocksUpdated && msg.Type != bus.EventCalendarChanged {
+			return
+		}
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error("bus: push destinations panicked", "request_id", msg.RequestID)
+			}
+		}()
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		if err := pusher.Notify(ctx); err != nil {
+			// The error names destination ids only.
+			log.Error("push destinations failed", "request_id", msg.RequestID, "err", err)
 		}
 	})
 
@@ -495,6 +519,10 @@ func purgeSource(db *store.DB) func(context.Context, string) (int, error) {
 	return func(ctx context.Context, id string) (int, error) {
 		n, err := db.DeleteEventsBySource(ctx, id)
 		if err != nil {
+			return n, err
+		}
+		// What focacal wrote to a removed calendar is gone with it.
+		if err := db.LedgerDeleteByCalendar(ctx, id); err != nil {
 			return n, err
 		}
 		if strings.Contains(id, ":") {

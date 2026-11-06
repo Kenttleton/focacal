@@ -87,6 +87,19 @@ CREATE TABLE IF NOT EXISTS conflict_dismissals (
 	key          TEXT PRIMARY KEY,
 	dismissed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Rebuildable runtime state: what focacal wrote to each target calendar, so
+-- ingest can recognize and ignore its own writes (spec section 7).
+CREATE TABLE IF NOT EXISTS write_ledger (
+	calendar_id    TEXT NOT NULL,
+	remote_id      TEXT NOT NULL,
+	destination_id TEXT NOT NULL,
+	item_key       TEXT NOT NULL,
+	hash           TEXT NOT NULL,
+	written_at     DATETIME NOT NULL,
+	PRIMARY KEY (calendar_id, remote_id),
+	UNIQUE (destination_id, item_key)
+);
 `
 
 // WALCheckpoint runs PRAGMA wal_checkpoint(TRUNCATE) to reclaim WAL file space.

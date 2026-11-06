@@ -43,7 +43,17 @@ const eventColumns = `id, source_id, calendar_id, uid, ical_uid, title, descript
 	start_time, end_time, all_day, status, response_status, show_as, conference_url, raw_ical, synced_at`
 
 // UpsertEvent inserts or replaces an event by its composite ID.
+//
+// An event whose fields hash to the write ledger's entry for (SourceID, UID)
+// is focacal's own write coming back: it is not stored and any row already
+// stored under its id is removed. A different hash is a real remote edit and
+// is stored normally (the next push refreshes the ledger).
 func (db *DB) UpsertEvent(ctx context.Context, e *Event) error {
+	if want, ok, err := db.LedgerGet(ctx, e.SourceID, e.UID); err != nil {
+		return err
+	} else if ok && want == FieldHash(e.Title, e.Description, e.Start, e.End) {
+		return db.DeleteEvent(ctx, e.ID)
+	}
 	const q = `
 INSERT INTO events
 	(id, source_id, calendar_id, uid, ical_uid, title, description, location,
