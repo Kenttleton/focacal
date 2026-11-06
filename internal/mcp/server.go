@@ -307,7 +307,7 @@ func (s *Server) toolListEvents(ctx context.Context, args json.RawMessage) (*too
 		return nil, err
 	}
 
-	return jsonResult(events)
+	return jsonResult(planEvents(config.UserConfigFromContext(ctx), events))
 }
 
 func (s *Server) toolGetFreeGaps(ctx context.Context, args json.RawMessage) (*toolResult, error) {
@@ -437,6 +437,21 @@ type Gap struct {
 	SuggestedSplit bool      `json:"suggested_split,omitempty"` // this slot was produced by pre-splitting a longer gap
 }
 
+// planEvents keeps only the events of calendars the planner schedules around
+// (plan: true). Events of any other source, including one no longer
+// configured, are dropped. The MCP tools are the planner's view of the
+// calendar; the REST and UI listings are deliberately not filtered.
+func planEvents(uc *config.UserConfig, events []*store.Event) []*store.Event {
+	plan := uc.PlanSourceIDs()
+	out := make([]*store.Event, 0, len(events))
+	for _, e := range events {
+		if plan[e.SourceID] {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
 func computeGaps(ctx context.Context, date time.Time) ([]Gap, error) {
 	// Reads config per tool request; a mid-replan reload is superseded by the
 	// replan request it publishes (see Agent.Replan).
@@ -461,6 +476,7 @@ func computeGaps(ctx context.Context, date time.Time) ([]Gap, error) {
 	if err != nil {
 		return nil, err
 	}
+	events = planEvents(uc, events)
 
 	buf := time.Duration(uc.Focus.BufferAroundMeetings) * time.Minute
 	minBlock := time.Duration(uc.Focus.MinBlockMinutes) * time.Minute

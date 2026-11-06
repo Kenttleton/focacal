@@ -71,8 +71,10 @@ func (s *Service) Sources(ctx context.Context) ([]map[string]any, error) {
 	for _, src := range srcs {
 		out = append(out, map[string]any{
 			"id":           src.ID,
-			"label":        src.Label,
+			"label":        src.Label, // the calendar name
 			"type":         src.Type,
+			"account":      src.AccountID, // "" for a url calendar
+			"plan":         src.Plan,
 			"calendar_ids": src.EffectiveCalendarIDs(),
 		})
 	}

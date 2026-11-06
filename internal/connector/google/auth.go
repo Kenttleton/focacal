@@ -52,13 +52,16 @@ func New(cfg config.SourceConfig, db *store.DB, redirectURL string) (*Connector,
 	if err := c.loadStoredToken(context.Background()); err != nil {
 		// Not fatal at construction time — connector needs auth before syncing.
 		fmt.Printf("google[%s]: no stored token yet, run 'focacal auth google %s'\n",
-			cfg.ID, cfg.ID)
+			cfg.ID, cfg.TokenKey())
 	}
 
 	return c, nil
 }
 
-// SourceID returns the config ID for this connector.
+// SourceID returns the calendar id for this connector. The OAuth token and
+// client credentials are keyed by cfg.TokenKey() (the account id, shared by
+// every calendar of the account); sync state, event ids and webhook tokens
+// stay keyed by the calendar id.
 func (c *Connector) SourceID() string { return c.cfg.ID }
 
 // AuthURL returns the OAuth2 authorization URL for the PKCE flow.
@@ -84,7 +87,7 @@ func (c *Connector) IsAuthorized() bool {
 }
 
 func (c *Connector) loadStoredToken(ctx context.Context) error {
-	tokenJSON, err := c.db.GetOAuthToken(ctx, c.cfg.ID)
+	tokenJSON, err := c.db.GetOAuthToken(ctx, c.cfg.TokenKey())
 	if err != nil || tokenJSON == "" {
 		return fmt.Errorf("no stored token")
 	}
@@ -101,7 +104,7 @@ func (c *Connector) persistToken(ctx context.Context, token *oauth2.Token) error
 	if err != nil {
 		return err
 	}
-	if err := c.db.SetOAuthToken(ctx, c.cfg.ID, string(b)); err != nil {
+	if err := c.db.SetOAuthToken(ctx, c.cfg.TokenKey(), string(b)); err != nil {
 		return err
 	}
 	c.client = c.oauth.Client(ctx, token)
@@ -112,7 +115,7 @@ func (c *Connector) persistToken(ctx context.Context, token *oauth2.Token) error
 func (c *Connector) httpClient() (*http.Client, error) {
 	if c.client == nil {
 		return nil, fmt.Errorf("google[%s]: not authorized — run 'focacal auth google %s'",
-			c.cfg.ID, c.cfg.ID)
+			c.cfg.ID, c.cfg.TokenKey())
 	}
 	return c.client, nil
 }
@@ -125,7 +128,7 @@ func loadClientCredentials(cfg config.SourceConfig) (clientID, clientSecret stri
 		return id, os.Getenv("GOOGLE_CLIENT_SECRET"), nil
 	}
 	// Per-source env vars: GOOGLE_CLIENT_ID_WORK_GOOGLE (source ID uppercased, hyphens→underscores).
-	sourceKey := strings.ToUpper(strings.ReplaceAll(cfg.ID, "-", "_"))
+	sourceKey := strings.ToUpper(strings.ReplaceAll(cfg.TokenKey(), "-", "_"))
 	if id := os.Getenv("GOOGLE_CLIENT_ID_" + sourceKey); id != "" {
 		return id, os.Getenv("GOOGLE_CLIENT_SECRET_" + sourceKey), nil
 	}

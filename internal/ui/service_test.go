@@ -48,3 +48,42 @@ func TestUISourcesNoLive(t *testing.T) {
 		t.Fatal("want error without config")
 	}
 }
+
+func TestUISourcesCarriesNameAndPlan(t *testing.T) {
+	dir := t.TempDir()
+	writeSources(t, dir, `accounts:
+  - id: work
+    type: caldav
+    caldav_url: https://dav.example
+    username: u
+    password: p
+calendars:
+  - id: work-team
+    name: Team
+    account: work
+    remote_id: /cal/team/
+    plan: false
+  - id: feed
+    name: Holidays
+    url: https://x.example/a.ics
+`)
+	live, err := config.NewLive(dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := NewService(nil, live).Sources(t.Context())
+	if err != nil || len(got) != 2 {
+		t.Fatalf("Sources = %v, %v", got, err)
+	}
+	team, feed := got[0], got[1]
+	if team["id"] != "work-team" || team["label"] != "Team" || team["type"] != "caldav" ||
+		team["account"] != "work" || team["plan"] != false {
+		t.Fatalf("team = %v", team)
+	}
+	if ids, _ := team["calendar_ids"].([]string); len(ids) != 1 || ids[0] != "/cal/team/" {
+		t.Fatalf("team calendar_ids = %v", team["calendar_ids"])
+	}
+	if feed["label"] != "Holidays" || feed["account"] != "" || feed["plan"] != true || feed["type"] != "ics" {
+		t.Fatalf("feed = %v", feed)
+	}
+}

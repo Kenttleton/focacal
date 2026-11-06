@@ -66,7 +66,7 @@ func (c *Connector) syncCalendar(ctx context.Context, client *http.Client, calen
 		if status != http.StatusOK {
 			if isExpiredRefreshToken(status, body) {
 				return fmt.Errorf("outlook[%s]: refresh token expired — run 'focacal auth outlook %s'",
-					c.cfg.ID, c.cfg.ID)
+					c.cfg.ID, c.cfg.TokenKey())
 			}
 			return fmt.Errorf("graph API %d: %s", status, body)
 		}
@@ -371,7 +371,7 @@ func (c *Connector) WriteEvent(ctx context.Context, e *connector.RemoteEvent) (s
 	if status < 200 || status >= 300 {
 		if isExpiredRefreshToken(status, respBody) {
 			return "", fmt.Errorf("outlook[%s]: refresh token expired — run 'focacal auth outlook %s'",
-				c.cfg.ID, c.cfg.ID)
+				c.cfg.ID, c.cfg.TokenKey())
 		}
 		return "", fmt.Errorf("write event %s %d: %s", method, status, respBody)
 	}

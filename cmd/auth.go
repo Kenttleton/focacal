@@ -19,15 +19,17 @@ import (
 )
 
 var authCmd = &cobra.Command{
-	Use:   "auth <provider> <source-id>",
-	Short: "Authorize a calendar source via OAuth2",
-	Long: `Authorize a calendar source and persist the token.
+	Use:   "auth <provider> <account-or-calendar-id>",
+	Short: "Authorize an OAuth account via OAuth2",
+	Long: `Authorize a Google or Outlook account and persist the token.
 
 Examples:
-  focacal auth google work-google
-  focacal auth outlook personal-outlook
+  focacal auth google work
+  focacal auth outlook work-team
 
-The source-id must match an entry in the sources list of calendars.yaml.
+The id is an account id or the id of a calendar of that account in
+calendars.yaml. The token is stored once per account, so every calendar of the
+account shares it.
 On first run this opens your browser for the OAuth2 consent screen.
 The callback is handled on localhost — no internet exposure needed.`,
 	Args: cobra.ExactArgs(2),
@@ -40,7 +42,7 @@ func init() {
 
 func runAuth(_ *cobra.Command, args []string) error {
 	provider := args[0]
-	sourceID := args[1]
+	id := args[1]
 
 	_, live, err := loadConfig(newLogger())
 	if err != nil {
@@ -49,16 +51,9 @@ func runAuth(_ *cobra.Command, args []string) error {
 
 	cfg := live.Current()
 
-	// Find the source config entry.
-	var srcCfg *config.SourceConfig
-	for i := range cfg.Sources {
-		if cfg.Sources[i].ID == sourceID {
-			srcCfg = &cfg.Sources[i]
-			break
-		}
-	}
-	if srcCfg == nil {
-		return fmt.Errorf("source %q not found in config — add it to sources in calendars.yaml", sourceID)
+	srcCfg, err := findAuthSource(cfg, provider, id)
+	if err != nil {
+		return err
 	}
 
 	db, err := store.Open("/data/focacal.db")
@@ -166,9 +161,52 @@ func runAuth(_ *cobra.Command, args []string) error {
 		}
 	}
 
-	fmt.Printf("✓ %s source %q authorized successfully.\n", provider, sourceID)
+	fmt.Printf("✓ %s account %q authorized successfully.\n", provider, srcCfg.TokenKey())
 	fmt.Println("  Run 'focacal sync' to perform the initial calendar sync.")
 	return nil
+}
+
+// findAuthSource resolves the id given to `focacal auth` to the source whose
+// connector performs the OAuth flow. id is an account id (an account id wins
+// over a calendar id of the same spelling) or a calendar id of an OAuth
+// account. For an account id the first resolved calendar of the account is
+// used; an account without calendars gets a source built from the account
+// itself. The saved token is keyed by TokenKey(), the account id.
+func findAuthSource(cfg *config.Config, provider, id string) (*config.SourceConfig, error) {
+	var src *config.SourceConfig
+	for i := range cfg.Sources {
+		if cfg.Sources[i].AccountID == id {
+			src = &cfg.Sources[i]
+			break
+		}
+	}
+	if src == nil {
+		for _, a := range cfg.Accounts {
+			if a.ID == id {
+				src = &config.SourceConfig{ID: a.ID, AccountID: a.ID, Type: a.Type,
+					CredentialsFile: a.CredentialsFile, TokenFile: a.TokenFile}
+				break
+			}
+		}
+	}
+	if src == nil {
+		for i := range cfg.Sources {
+			if cfg.Sources[i].ID == id {
+				src = &cfg.Sources[i]
+				break
+			}
+		}
+	}
+	if src == nil {
+		return nil, fmt.Errorf("no account or calendar with id %q in calendars.yaml", id)
+	}
+	if src.Type != "google" && src.Type != "outlook" {
+		return nil, fmt.Errorf("%q is not an OAuth account (type %q); only google and outlook need 'focacal auth'", id, src.Type)
+	}
+	if src.Type != provider {
+		return nil, fmt.Errorf("%q is a %s account, not %s", id, src.Type, provider)
+	}
+	return src, nil
 }
 
 func randomState() (string, error) {

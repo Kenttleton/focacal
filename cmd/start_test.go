@@ -516,3 +516,123 @@ func TestPlannerReloadPublishesReplanRequest(t *testing.T) {
 		t.Fatal("planner reload did not publish a replan request")
 	}
 }
+
+// resolvedCfg builds a Config from accounts and calendars the way the loader
+// does, so the tests compare what reconcile sees in production.
+func resolvedCfg(password string, cals ...config.CalendarConfig) *config.Config {
+	c := &config.Config{}
+	c.Accounts = []config.AccountConfig{
+		{ID: "work", Type: "caldav", CalDAVURL: "https://dav.example", Username: "u", Password: password},
+		{ID: "home", Type: "caldav", CalDAVURL: "https://home.example", Username: "u", Password: "p"},
+	}
+	c.Calendars = cals
+	c.Resolve()
+	return c
+}
+
+var modelCals = []config.CalendarConfig{
+	{ID: "work-a", Account: "work", RemoteID: "/a/"},
+	{ID: "work-b", Account: "work", RemoteID: "/b/"},
+	{ID: "home-c", Account: "home", RemoteID: "/c/"},
+}
+
+func TestReconcileAccountChangeRebuildsItsCalendars(t *testing.T) {
+	reg := connector.NewRegistry()
+	build, _ := fakeBuild()
+	old := resolvedCfg("p1", modelCals...)
+	reconcile(reg, nil, old, build, discardLog())
+	homeBefore, _ := reg.Get("home-c")
+
+	next := resolvedCfg("p2", modelCals...) // only the work account's password changed
+	added, dropped := reconcile(reg, old, next, build, discardLog())
+	if !reflect.DeepEqual(added, []string{"work-a", "work-b"}) {
+		t.Fatalf("rebuilt = %v, want both calendars of the work account", added)
+	}
+	if len(dropped) != 0 {
+		t.Fatalf("dropped = %v, want none", dropped)
+	}
+	if homeAfter, _ := reg.Get("home-c"); homeAfter != homeBefore {
+		t.Fatal("a calendar of another account was rebuilt")
+	}
+}
+
+func TestReconcileRemovedCalendarDropsAndPurgesOnlyIt(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	for _, id := range []string{"work-a", "work-b", "home-c"} {
+		if err := db.UpsertEvent(ctx, testEvent(id, "1")); err != nil {
+			t.Fatal(err)
+		}
+		for _, k := range []string{id, id + ":cal"} {
+			if err := db.SetSyncState(ctx, k, "tok", "", time.Time{}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	// The shared account token is not the calendar's to delete.
+	if err := db.SetOAuthToken(ctx, "work", "{}"); err != nil {
+		t.Fatal(err)
+	}
+	reg := connector.NewRegistry()
+	build, _ := fakeBuild()
+	old := resolvedCfg("p", modelCals...)
+	reconcile(reg, nil, old, build, discardLog())
+
+	next := resolvedCfg("p", modelCals[0], modelCals[2]) // work-b removed
+	added, dropped := reconcile(reg, old, next, build, discardLog())
+	if len(added) != 0 {
+		t.Fatalf("rebuilt = %v, want none", added)
+	}
+	if len(dropped) != 1 || dropped[0].id != "work-b" {
+		t.Fatalf("dropped = %+v, want only work-b", dropped)
+	}
+	if n := purgeDropped(ctx, discardLog(), reg, dropped, purgeSource(db)); n != 1 {
+		t.Fatalf("purged = %d, want 1", n)
+	}
+	evs, _ := db.ListEvents(ctx, time.Now().Add(-time.Hour), time.Now().Add(2*time.Hour))
+	var srcs []string
+	for _, e := range evs {
+		srcs = append(srcs, e.SourceID)
+	}
+	slices.Sort(srcs)
+	if !reflect.DeepEqual(srcs, []string{"home-c", "work-a"}) {
+		t.Fatalf("events left = %v", srcs)
+	}
+	states, _ := db.ListSyncStates(ctx)
+	var keys []string
+	for _, s := range states {
+		keys = append(keys, s.SourceID)
+	}
+	if !reflect.DeepEqual(keys, []string{"home-c", "home-c:cal", "work-a", "work-a:cal"}) {
+		t.Fatalf("sync states left = %v", keys)
+	}
+	if tok, _ := db.GetOAuthToken(ctx, "work"); tok == "" {
+		t.Fatal("shared account token was deleted")
+	}
+}
+
+func TestReconcileRemoveThenQuickReAddSkipsPurge(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	if err := db.UpsertEvent(ctx, testEvent("work-b", "1")); err != nil {
+		t.Fatal(err)
+	}
+	reg := connector.NewRegistry()
+	build, _ := fakeBuild()
+	full := resolvedCfg("p", modelCals...)
+	reconcile(reg, nil, full, build, discardLog())
+
+	without := resolvedCfg("p", modelCals[0], modelCals[2])
+	_, dropped := reconcile(reg, full, without, build, discardLog())
+	if len(dropped) != 1 {
+		t.Fatalf("dropped = %+v", dropped)
+	}
+	// Re-added before the purge ran (a delete and re-create in quick succession).
+	reconcile(reg, without, full, build, discardLog())
+	if n := purgeDropped(ctx, discardLog(), reg, dropped, purgeSource(db)); n != 0 {
+		t.Fatalf("purged %d rows of a re-added calendar", n)
+	}
+	if got := eventCount(t, db); got != 1 {
+		t.Fatalf("events = %d, want the re-added calendar's row kept", got)
+	}
+}

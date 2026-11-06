@@ -48,14 +48,22 @@ func (c *Connector) Sync(ctx context.Context) error {
 	return nil
 }
 
-// wantCalendar reports whether the calendar at path should be synced.
-// If CalendarIDs is empty, all calendars are included.
+// wantCalendar reports whether the collection at path should be synced.
+//
+// With no CalendarIDs every collection of the home set is synced (the
+// behavior before the calendar model). A resolved calendar carries its remote
+// id in CalendarIDs, and that id is the collection path as the server lists it
+// (the path of the collection under the home set, as returned by
+// FindCalendars). It must equal the collection path; a trailing slash is not
+// significant. A substring match is wrong here: "/home/a/" would also select
+// "/home/a/archive/".
 func (c *Connector) wantCalendar(path string) bool {
 	if len(c.cfg.CalendarIDs) == 0 {
 		return true
 	}
+	p := strings.TrimSuffix(path, "/")
 	for _, id := range c.cfg.CalendarIDs {
-		if strings.Contains(path, id) {
+		if strings.TrimSuffix(id, "/") == p {
 			return true
 		}
 	}

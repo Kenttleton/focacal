@@ -59,8 +59,9 @@ func (s SourceConfig) TokenKey() string {
 }
 
 // PlanSourceIDs returns the ids of the resolved sources the planner
-// schedules around.
-func (c *Config) PlanSourceIDs() map[string]bool {
+// schedules around. It lives on UserConfig so request-scoped readers that only
+// hold a UserConfig (the MCP tools) can use it; Config inherits it.
+func (c *UserConfig) PlanSourceIDs() map[string]bool {
 	out := make(map[string]bool, len(c.Sources))
 	for _, s := range c.Sources {
 		if s.Plan {

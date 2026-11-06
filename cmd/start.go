@@ -374,7 +374,13 @@ func usesRedirectBase(sourceType string) bool {
 	return sourceType == "google" || sourceType == "outlook"
 }
 
-// reconcileConnectors brings reg in line with cur.Sources. Sources that are
+// reconcileConnectors brings reg in line with cur.Sources, which holds one
+// resolved source per calendar (id = calendar id, with its account's
+// connection fields merged in). Because the account fields are part of each
+// resolved source, changing an account rebuilds exactly the calendars of that
+// account and no others; removing a calendar drops and purges only that
+// calendar's events and sync state (the account's OAuth token, shared by its
+// other calendars, is never touched). Sources that are
 // new, or whose SourceConfig differs from old (or, for OAuth source types,
 // whose redirect base URL changed), are built afresh; untouched sources keep
 // their existing instance; sources no longer configured are dropped. A source
