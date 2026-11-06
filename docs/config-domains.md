@@ -181,7 +181,8 @@ the response is the candidate view, with a `pruned` list of
 `{"kind": "calendar" | "destination" | "destination_input", "id": "..."}`
 (an input has the id `<destination>/<calendar>`). Nothing is written or
 reloaded on a dry run. A real delete applies the delete and the cascade in one
-write. Only entries that change are touched; references you broke by hand
+write. Only entries that change are touched (a destination left with no inputs after
+a delete stays in the file, empty); references you broke by hand
 elsewhere are left alone, and a delete still fails while such a reference
 exists.
 
@@ -235,7 +236,8 @@ for the destination whose id is `focacal` (404 if you removed it), and
 one applies only its own inputs and visibility. Changes apply without a
 restart.
 
-`auth` on a served target is `private` (the default) or `public`.
+`auth` on a served target is `private` (the default) or `public`. `private`
+does not itself enforce anything: feeds are open when `auth.enabled` is `false`.
 **`auth: public` is not available yet** and is rejected by validation until the
 auth work ships. Today, whether a feed needs a login is decided by the global
 auth middleware (`auth.enabled` in `config.yaml`), the same as the rest of the
@@ -253,21 +255,24 @@ into that calendar after each sync or replan, and records each write in the
   ingested as a new event (this also tolerates providers that truncate bodies
   to 255 characters).
 - **History is never deleted.** An item that drops out of the projection is
-  deleted remotely only if it starts inside the push window (7 days back to 14
-  days ahead). Older items stay, and ledger rows are forgotten without a
+  deleted remotely only if it starts no earlier than 7 days ago (the push
+  window reaches 14 days ahead). Items that started earlier stay, and ledger rows are forgotten without a
   remote delete once the event ended more than 30 days ago.
 - **Mass-delete guard.** If one push would delete more than 5 items and more
   than half of the in-window ledger rows, no deletes happen and the destination
-  reports a failure. The guard is lifted for a destination after its config
-  (inputs or target) changed during this process's lifetime; the first push
-  after a start is always guarded.
+  reports a failure. The guard is lifted only for the single push that first
+  sees a changed destination config (inputs or target); the next push is
+  guarded again. The first push after the process starts is always guarded.
 - **Deleted remote events are recreated on change.** If you delete a pushed
   event remotely, focacal creates it again the next time that item changes
   (the update gets "not found", the ledger row is dropped and the item is
   written anew). An unchanged item is not recreated.
 - **All-day events are not pushed.** A failing destination does not stop the
   others.
-- Removing a destination does not delete what it wrote.
+- Removing a destination does not delete what it wrote. Retargeting one
+  (changing its target calendar) does: the next push deletes its events in the
+  old target calendar that start no earlier than 7 days ago, and writes them to
+  the new one.
 
 ### Migration to the calendar model
 
@@ -288,14 +293,37 @@ migration above:
   destination that listed no usable inputs gets only `focacal`, never `all`,
   and an input that names the destination's own target is dropped. `ics`
   destinations cannot be converted and are dropped with a warning naming the
-  destination id.
+  destination id, as are destinations of any other unknown type.
+- **`writeback` and `cross_busy` are not converted.** The per-source
+  `writeback` / `cross_busy` keys and any top-level `writeback:` block are
+  ignored by the migration (and by the loader). If your planned blocks or
+  mirrored busy time were written to a real calendar, that stops until you
+  create a push destination. For planned blocks, use the built-in `focacal`
+  calendar as the input and the calendar to write to as the target:
+
+  ```yaml
+  destinations:
+    - id: focus-to-work
+      name: Focus blocks on my work calendar
+      inputs:
+        - calendar: focacal
+          kinds: [focus, lunch]    # omit to push every kind
+      target:
+        calendar: work             # a calendar of an account you authorized
+  ```
+
+  To mirror busy time from another calendar, add it as an input with an
+  `event` block (for example `title: {visibility: false}` for "Busy"). The
+  target should be `plan: false`.
 - A `focacal` served destination is added if there is none.
 - Header comments and `oauth` are kept; comments inside the old entries are
   lost. The output is validated before anything is written, and the original
   is saved as `calendars.yaml.bak` (mode 0600).
-- The store's caches are reset once: events and sync state are cleared (so the
-  next sync rebuilds them under the new ids) and the per-block write-back
-  record is emptied. OAuth tokens and planner blocks are kept.
+- The store's caches are reset once, tied to the database schema version
+  (`PRAGMA user_version` 2) rather than to the YAML conversion: events and sync
+  state are cleared (so the next sync rebuilds them under the new ids), and each
+  block's `source_event_id` and write-back record are cleared. OAuth tokens and
+  planner blocks are kept.
 
 A duplicate source id (case-insensitive) stops the migration with an error and
 changes nothing.

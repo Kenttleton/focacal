@@ -293,7 +293,12 @@ destinations:                  # where focacal publishes
   allowed.
 - **Migration.** An old `sources:` config is converted on first start (a
   `calendars.yaml.bak` is kept, migrated destinations get least-privilege
-  inputs, and cached events are re-synced once).
+  inputs, and cached events are re-synced once). **Old `writeback` and
+  `cross_busy` settings are not converted**: to keep writing planned blocks (or
+  mirrored busy time) to a real calendar, add a push destination with the
+  built-in `focacal` calendar as input and that calendar as target, as in the
+  `share-focus` example above and in
+  [the migration notes](docs/config-domains.md#migration-to-the-calendar-model).
 
 ### Push destinations
 
