@@ -3,7 +3,7 @@
 # This directory (config/) is the whole portable configuration:
 #   config.yaml     App (this file)
 #   planner.yaml    Planner: working hours, lunch, focus, scheduler agent, colors
-#   calendars.yaml  Calendars: sources, destinations and the OAuth redirect
+#   calendars.yaml  Calendars: accounts, calendars, destinations, OAuth redirect
 #   credentials.yaml  login (local only, gitignored, created by /auth/setup)
 # docker-compose.yml mounts it at /data/config. See docs/config-domains.md.
 # Edits apply live within about a second, except the server: block below,

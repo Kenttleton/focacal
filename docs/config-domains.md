@@ -25,12 +25,15 @@ from.
 |---|---|---|---|
 | `config.yaml` | App | `server` (ports, bind address, webhooks), `auth.enabled` | yes |
 | `planner.yaml` | Planner | `working_hours` (with the planning time zone), `lunch`, `focus`, `colors` (generated-event palette), `agent` (scheduler endpoint and model, not `api_key`) | yes |
-| `calendars.yaml` | Calendars | `sources` (accounts read from), `destinations` and `oauth.redirect_base_url` | yes; secrets are references (see below) |
+| `calendars.yaml` | Calendars | `accounts`, `calendars`, `destinations` and `oauth.redirect_base_url` (see [The calendar model](#the-calendar-model)) | yes; secrets are references (see below) |
 | `credentials.yaml` | (none) | login `username` and bcrypt `password_hash`, mode 0600 | local only, gitignored |
 | `*.bak` | (none) | previous file contents from a migration or a fallback write | local only, gitignored |
 
 Each domain is read only from its own file. A `sources:` block left in
-`config.yaml` is ignored, and startup logs a warning naming it.
+`config.yaml` is moved to `calendars.yaml` and converted on start (see
+[Migration](#migration-to-the-calendar-model)). A `sources:` key in
+`calendars.yaml` itself is converted the same way; if it is still there when
+the file is loaded, loading fails with a message telling you to restart.
 
 Values you can set by hand and from the UI are the same values. The UI writes
 the file for the domain it edits. Changes apply live (see
@@ -40,7 +43,7 @@ the file for the domain it edits. Changes apply live (see
 
 Focacal watches the config directory. A save from the UI, or a hand edit of a
 file, applies to the running process within about a second, with no restart.
-Sources, destinations, planner values (including `agent`), the OAuth redirect
+Accounts, calendars, destinations, planner values (including `agent`), the OAuth redirect
 base, `auth.enabled` and the login follow the live config.
 
 - **`server:` needs a restart.** Ports, `bind_address` and `webhooks_enabled`
@@ -57,9 +60,10 @@ base, `auth.enabled` and the login follow the live config.
 - **Bind mounts that drop events.** Some mounts (certain Docker Desktop and
   network file systems) do not deliver file events. The watcher then falls
   back to polling every 5 seconds.
-- **Removing a source purges its data.** Deleting a source (by hand or in the
-  UI) deletes its stored events and sync state. Its OAuth tokens are kept, so
-  re-adding the same id does not need `focacal auth` again.
+- **Removing a calendar purges its data.** Deleting a calendar (by hand or in
+  the UI, including by cascade from its account) deletes its stored events and
+  sync state, and the push ledger rows for it. OAuth tokens are kept per
+  account, so re-adding the same account id does not need `focacal auth` again.
 - **Resetting the login needs no restart.** Credentials are read per request,
   so deleting `credentials.yaml` reopens `/auth/setup` immediately. Login
   tokens already issued stay valid until the new setup completes (setup
@@ -73,13 +77,20 @@ the API (`GET /openapi.json` has the full schema):
 - `GET /config/{domain}` (`app`, `planner`, `calendars`) returns
   `{"values": {...}, "order": {...}, "pending_restart": false, "load_error": ""}`. `values` are
   the file values over the defaults (no environment overrides); collections are
-  objects keyed by id (destinations by `id|calendar_id`) and `order` lists
-  their ids in file order. Secrets are never returned; each source has
-  `has_secret`.
+  objects keyed by id and `order` lists their ids in file order (for
+  `calendars`: `order.accounts`, `order.calendars`, `order.destinations`).
+  Secrets are never returned; accounts and calendars have `has_secret`.
 - `PATCH /config/{domain}` takes a JSON merge patch (RFC 7396): send only what
   changes, `null` deletes a key or an item, for example
   `{"working_hours": {"start": "08:30"}}` or
-  `{"sources": {"old-feed": null}}`. It returns the new view.
+  `{"calendars": {"old-feed": null}}`. It returns the new view. Ids cannot be
+  changed (see [Ids and names](#ids-and-names)).
+- `POST /config/calendars/{collection}` (`accounts`, `calendars`,
+  `destinations`) creates an item from a body with a `name` and no `id`. The
+  server generates the id and returns `201 {"id": "...", "view": {...}}`.
+- `PATCH /config/calendars?dry_run=true` validates a patch and returns the view
+  it would produce, including what a delete would prune, without writing or
+  reloading anything (see [Deleting](#deleting-and-cascades)).
   Errors are `{"error": "..."}`: 400 malformed body or unknown key, 404 unknown
   domain, 413 body over 1 MiB, 422 a value fails validation or a secret was
   sent inline (nothing is written), 500 a file on disk could not be read or
@@ -92,14 +103,14 @@ Secrets never go into the domain files through the API:
 
 - OAuth client secrets: `.env` (`GOOGLE_CLIENT_ID`, `OUTLOOK_CLIENT_SECRET`, ...)
   or a `credentials_file` reference.
-- ICS feed URLs: `ics_url_env: FOCACAL_<NAME>` with the URL in `.env`. An
-  inline `ics_url` or CalDAV `password` written by hand still works.
+- Feed URLs: a url calendar's `url_env: FOCACAL_<NAME>` with the URL in `.env`.
+  An inline `url` or CalDAV `password` written by hand still works.
   docker-compose.yml passes `.env` into the container (`env_file`, optional).
   If the variable is not set, focacal still starts: it logs a warning naming
-  the source and the variable (never a value), and only that calendar fails
+  the calendar and the variable (never a value), and only that calendar fails
   to sync, with an error naming the variable, until you set it (environment
   changes need a process restart).
-  An ics source with neither `ics_url_env` nor `ics_url` is invalid. Pick
+  A calendar with neither an `account` nor a `url`/`url_env` is invalid. Pick
   names that are not config overrides (`FOCACAL_ICS_<NAME>` is safe).
 - CalDAV URLs must not embed credentials (`https://user:pw@host`). The API
   rejects them and never returns that part; set `username` instead.
@@ -118,17 +129,189 @@ overrides `oauth.redirect_base_url`. Overrides change what the process runs
 with, not the files. The UI shows the file values, and an override never
 makes `pending_restart` true. Environment variables are read at process start.
 
+## The calendar model
+
+`calendars.yaml` has three lists, plus `oauth`:
+
+- **`accounts`**: one entry per sign-in (`type` is `google`, `outlook` or
+  `caldav`, with `credentials_file`, `token_file` or the CalDAV `caldav_url`
+  and `username`). Calendars of one account share its OAuth token, which is
+  stored under the account id (`focacal auth <provider> <account-id>`).
+- **`calendars`**: what focacal reads. A calendar is either an account
+  calendar (`account` names the account, `remote_id` picks the calendar inside
+  it; empty means the connector's default calendar) or a read-only feed
+  (`url` or `url_env`, no account). `plan` says whether the planner schedules
+  around it; it defaults to true.
+- **`destinations`**: where focacal publishes. Each has `inputs` and exactly
+  one `target`: either `calendar` (push into a writable calendar) or
+  `served: true` (serve a feed). A url calendar cannot be a push target.
+
+There is also one built-in calendar, `focacal`. It is not listed in the file:
+it stands for the planner's blocks (focus, lunch, break). It can be an input of
+a destination, never a target, and no calendar can use the id `focacal`.
+
+The sample ships one active destination, `focacal`: `inputs: all` into a served
+private feed. See `config.example/calendars.yaml` for commented examples of an
+account, calendars, a push destination and a second served feed.
+
+### Ids and names
+
+- New ids are server-generated slugs of the `name`: lowercase letters, digits
+  and dashes (`^[a-z0-9][a-z0-9-]{0,62}$`), with `-2`, `-3` appended on a
+  collision. Uniqueness is case-insensitive and per list: accounts, calendars
+  and destinations are separate namespaces.
+- Ids are immutable. A patch that changes an `id` is refused; delete and
+  recreate instead. `id` is not accepted in a create body.
+- `name` is the display name and replaces the old `label`. A hand-edited file
+  may still say `label`; it loads as `name` (`name` wins if both are present)
+  and a save writes `name` only. A hand-written id that does not match the
+  pattern still loads, edits and deletes; only creating a new one through the
+  API enforces it.
+- A reference to an id that does not exist (a calendar naming a missing
+  account, an input naming a missing calendar) is a warning in the log on load
+  and the entry is skipped; it is not a load error. The API is stricter: a
+  patch that leaves a dangling reference is rejected with 422.
+
+### Deleting and cascades
+
+Deleting an account deletes its calendars; deleting a calendar deletes the
+destinations that target it and removes it from the `inputs` of other
+destinations. Add `?dry_run=true` to the same `PATCH` to see the result first:
+the response is the candidate view, with a `pruned` list of
+`{"kind": "calendar" | "destination" | "destination_input", "id": "..."}`
+(an input has the id `<destination>/<calendar>`). Nothing is written or
+reloaded on a dry run. A real delete applies the delete and the cascade in one
+write. Only entries that change are touched; references you broke by hand
+elsewhere are left alone, and a delete still fails while such a reference
+exists.
+
+### Inputs and visibility
+
+`inputs` is the string `all` or a list. Each item names a `calendar` (or
+`focacal`) and may carry:
+
+- `kinds` (the `focacal` input only): which planner blocks pass, from `focus`,
+  `lunch`, `break`. Absent means all kinds.
+- `event`: what is shown of that input's events. **Absent means full**, the
+  event is published unchanged. **A block that is present is taken literally**,
+  with every field you leave out treated as hidden, so
+  `title: {visibility: true, rename: Busy}` alone also hides the body.
+  `title.visibility: false` shows `Busy`, or `title.rename` when set; a
+  `rename` on a visible title replaces it. `body.visibility: false` empties
+  the description.
+
+Hiding the title or the body also hides the location and the meeting URL, and
+removes the original ids: the published event gets an opaque, stable id and no
+source calendar marker, so nothing identifies the origin. The same title rules
+apply to planner blocks from the `focacal` input.
+
+`inputs: all` expands to every calendar plus `focacal`, minus the
+destination's own target. Within one destination the first item per calendar
+wins.
+
+### Cycles
+
+A push destination writes into a calendar that other destinations may read, so
+a loop is possible. Validation builds a graph with an edge from each input
+calendar to the destination's target (with `all` expanded) and rejects a
+config that contains a cycle, naming the destinations involved. The cost is
+that **two-way mirroring is not expressible**: `work -> home` plus
+`home -> work` is a cycle, and so are two `inputs: all` destinations that
+write to two different calendars. A served destination has no outgoing edge,
+and `focacal` has no incoming edge, so they never form a cycle.
+
+### Planning
+
+`plan` (default true) on a calendar controls whether the planner schedules
+around its events. A calendar that exists only as a push target should be
+`plan: false`, so focacal does not plan around its own published copies.
+
+### Served feeds
+
+A served destination publishes a CalDAV and ICS feed at `/calendar/{id}/`
+(`GET /calendar/` lists them). `/focacal/` and `/focacal/calendar/` are aliases
+for the destination whose id is `focacal` (404 if you removed it), and
+`/.well-known/caldav` redirects to `/calendar/`. Feeds are independent: each
+one applies only its own inputs and visibility. Changes apply without a
+restart.
+
+`auth` on a served target is `private` (the default) or `public`.
+**`auth: public` is not available yet** and is rejected by validation until the
+auth work ships. Today, whether a feed needs a login is decided by the global
+auth middleware (`auth.enabled` in `config.yaml`), the same as the rest of the
+API; there is no per-feed authentication.
+
+### Push destinations
+
+A destination with a `calendar` target writes its projected events and blocks
+into that calendar after each sync or replan, and records each write in the
+`write_ledger` table. The safeguards:
+
+- **Focacal only touches events it wrote.** Updates and deletes go by the
+  ledger; events you created in that calendar are never modified.
+- **Own writes are not read back.** An event matching a ledger entry is not
+  ingested as a new event (this also tolerates providers that truncate bodies
+  to 255 characters).
+- **History is never deleted.** An item that drops out of the projection is
+  deleted remotely only if it starts inside the push window (7 days back to 14
+  days ahead). Older items stay, and ledger rows are forgotten without a
+  remote delete once the event ended more than 30 days ago.
+- **Mass-delete guard.** If one push would delete more than 5 items and more
+  than half of the in-window ledger rows, no deletes happen and the destination
+  reports a failure. The guard is lifted for a destination after its config
+  (inputs or target) changed during this process's lifetime; the first push
+  after a start is always guarded.
+- **Deleted remote events are recreated on change.** If you delete a pushed
+  event remotely, focacal creates it again the next time that item changes
+  (the update gets "not found", the ledger row is dropped and the item is
+  written anew). An unchanged item is not recreated.
+- **All-day events are not pushed.** A failing destination does not stop the
+  others.
+- Removing a destination does not delete what it wrote.
+
+### Migration to the calendar model
+
+On start, a `calendars.yaml` that has the old `sources` key (and neither
+`accounts` nor `calendars`) is converted in place, after the single-file
+migration above:
+
+- Each source becomes an account and a calendar. The account id and the first
+  calendar id are the old source id; extra `calendar_ids` become further
+  calendars with slug ids (`<source>-<remote>`) named `<label> (<remote id>)`.
+  No `calendar_ids` means `primary` for Google and Outlook and the default
+  calendar for CalDAV. Each calendar gets `plan: true`.
+- `ics` sources become account-less url calendars (`url` / `url_env` kept).
+- Old destinations become new ones. A destination reuses the calendar of the
+  source it pointed at, or, for a Google, Outlook or CalDAV destination with
+  its own details, gets a new account and a `plan: false` calendar. Inputs are
+  mapped to the new calendar ids, and **inputs are least privilege**: a
+  destination that listed no usable inputs gets only `focacal`, never `all`,
+  and an input that names the destination's own target is dropped. `ics`
+  destinations cannot be converted and are dropped with a warning naming the
+  destination id.
+- A `focacal` served destination is added if there is none.
+- Header comments and `oauth` are kept; comments inside the old entries are
+  lost. The output is validated before anything is written, and the original
+  is saved as `calendars.yaml.bak` (mode 0600).
+- The store's caches are reset once: events and sync state are cleared (so the
+  next sync rebuilds them under the new ids) and the per-block write-back
+  record is emptied. OAuth tokens and planner blocks are kept.
+
+A duplicate source id (case-insensitive) stops the migration with an error and
+changes nothing.
+
 ## What the database holds
 
 `/data/focacal.db` holds rebuildable state only:
 
 | Table | Contents | Rebuilt by |
 |---|---|---|
-| `events` | events synced from sources | the next sync |
-| `sync_state` | per-source sync cursors | a full sync |
-| `oauth_tokens` | OAuth refresh tokens | `focacal auth <provider> <source-id>` |
+| `events` | events synced from calendars | the next sync |
+| `sync_state` | per-calendar sync cursors | a full sync |
+| `oauth_tokens` | OAuth refresh tokens | `focacal auth <provider> <account-id>` |
 | `blocks` | planner output, plus blocks added or edited in the UI | a replan (UI edits are lost) |
 | `conflict_dismissals` | which conflicts you marked as seen | nothing: they show again |
+| `write_ledger` | what push destinations wrote, so focacal does not read its own writes back and only ever touches events it wrote | nothing: losing it means pushed events are no longer recognized (see [Push destinations](#push-destinations)) |
 
 `/data/recovery.key` (next to the DB) is the key for `/auth/recover`. It is
 generated on first start and printed once.
@@ -196,8 +379,8 @@ On Linux, make `config/` writable by uid 1001 (`sudo chown -R 1001 config`).
 1. Copy the config directory (`config/`) to the new host. Include
    `credentials.yaml` to keep the same login, or leave it out to set a new one.
 2. Copy `.env` (secrets are not in `config/`).
-3. Start focacal, then run `focacal auth <provider> <source-id>` for each
-   OAuth source (tokens live in the DB, which you do not copy).
+3. Start focacal, then run `focacal auth <provider> <account-id>` for each
+   OAuth account (tokens live in the DB, which you do not copy).
 4. The first sync and replan rebuild the DB.
 
 To reset the login, delete `credentials.yaml`: `/auth/setup`

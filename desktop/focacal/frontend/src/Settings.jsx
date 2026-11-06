@@ -1,60 +1,73 @@
 import { useState, useEffect } from 'react'
-import { Stack, TextInput, Select, Switch, Button, Text, Group, Title, Divider, Drawer, Alert, useMantineColorScheme } from '@mantine/core'
-import { api, loadCalendars } from './api'
+import { Stack, Select, Switch, Button, Text, Group, Title, Divider, Modal, Alert, useMantineColorScheme } from '@mantine/core'
+import { loadCalendars, deleteConfigItem } from './api'
+
+const KIND_NAMES = { calendar: 'Calendar', destination: 'Destination', destination_input: 'Destination input' }
+const COLLECTION_NAMES = { accounts: 'account', calendars: 'calendar', destinations: 'destination' }
+
+// Read-only list of one collection: the name, with the id shown read-only and a
+// delete action. Adding and editing are intentionally not offered here.
+function ItemList({ collection, items, onDelete }) {
+  if (!items.length) return <Text size="sm" c="dimmed">None configured</Text>
+  return (
+    <Stack gap={4}>
+      {items.map(it => (
+        <Group key={it.id} justify="space-between" wrap="nowrap">
+          <div>
+            <Text size="sm">{it.name || it.id}</Text>
+            <Text size="xs" c="dimmed">id: {it.id}</Text>
+          </div>
+          <Button size="xs" variant="subtle" color="red" onClick={() => onDelete(collection, it)}>Delete</Button>
+        </Group>
+      ))}
+    </Stack>
+  )
+}
 
 export default function Settings({ prefs, onPrefs, onSaved }) {
   const { colorScheme, setColorScheme } = useMantineColorScheme()
-  const [sources, setSources] = useState([])
+  const [accounts, setAccounts] = useState([])
+  const [calendars, setCalendars] = useState([])
   const [dests, setDests] = useState([])
   const [pendingRestart, setPendingRestart] = useState(false)
   const [loadError, setLoadError] = useState('')
   const [error, setError] = useState('')
-  const [drawerOpen, setDrawerOpen] = useState(false)
-  const [drawerType, setDrawerType] = useState('source')
-  const [editing, setEditing] = useState(null) // the saved entry being edited, or null when adding
-  const [form, setForm] = useState({})
+  const [confirm, setConfirm] = useState(null) // {collection, item, pruned} while a delete awaits confirmation
+  const [busy, setBusy] = useState(false)
 
   const load = async () => {
     try {
       const c = await loadCalendars()
-      setSources(c.sources); setDests(c.destinations); setPendingRestart(c.pendingRestart); setLoadError(c.loadError)
+      setAccounts(c.accounts); setCalendars(c.calendars); setDests(c.destinations)
+      setPendingRestart(c.pendingRestart); setLoadError(c.loadError)
     } catch (e) { setError(e.message) }
   }
   useEffect(() => { load() }, [])
 
-  const genId = () => (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : Math.random().toString(36).slice(2)
-  const openAdd = (type) => { setDrawerType(type); setEditing(null); setError(''); setForm({ id: genId() }); setDrawerOpen(true) }
-  const openEdit = (type, item) => { setDrawerType(type); setEditing(item); setError(''); setForm({ ...item }); setDrawerOpen(true) }
-
-  // Sends one merge patch to /config/calendars. The server validates and answers
-  // 400/422 with {error}; secrets are never part of a patch.
-  const patchCalendars = async (patch) => {
+  // Step 1: ask the server what the delete would remove (dry run, nothing is written).
+  const askDelete = async (collection, item) => {
+    setError('')
     try {
-      await api('/config/calendars', { method: 'PATCH', body: JSON.stringify(patch) })
-      setError(''); setDrawerOpen(false); await load(); if (onSaved) onSaved()
+      const pruned = await deleteConfigItem(collection, item.id, true)
+      setConfirm({ collection, item, pruned })
     } catch (e) { setError(e.message) }
   }
-
-  // Only the fields the form edits, and for an existing entry only those that changed.
-  const changed = (fields) => {
-    const out = {}
-    for (const k of fields) if (!editing || form[k] !== editing[k]) out[k] = form[k] ?? ''
-    return out
+  // Step 2: after confirmation, delete for real, then refresh the lists and the sidebar.
+  const doDelete = async () => {
+    const { collection, item } = confirm
+    setBusy(true)
+    try {
+      await deleteConfigItem(collection, item.id, false)
+      setConfirm(null); setError(''); await load(); if (onSaved) onSaved()
+    } catch (e) { setError(e.message); setConfirm(null) }
+    setBusy(false)
   }
-  const saveSource = async () => {
-    const id = form.id || genId()
-    const fields = changed(['label', 'type'])
-    if (editing && !Object.keys(fields).length) { setDrawerOpen(false); return }
-    await patchCalendars({ sources: { [id]: editing ? fields : { id, ...fields } } })
-  }
-  const saveDest = async () => {
-    const id = form.id || genId()
-    const calendar_id = form.calendar_id || 'primary'
-    await patchCalendars({ destinations: { [id + '|' + calendar_id]: { id, calendar_id } } })
-  }
-  const remove = async () => {
-    const key = drawerType === 'source' ? editing.id : editing.id + '|' + editing.calendar_id
-    await patchCalendars({ [drawerType === 'source' ? 'sources' : 'destinations']: { [key]: null } })
+  const nameOf = (list, id) => (list.find(x => x.id === id)?.name) || id
+  const describe = (p) => {
+    if (p.kind === 'calendar') return `${KIND_NAMES.calendar} ${nameOf(calendars, p.id)} (${p.id})`
+    if (p.kind === 'destination') return `${KIND_NAMES.destination} ${nameOf(dests, p.id)} (${p.id})`
+    const [dest, cal] = p.id.split('/')
+    return `Input ${nameOf(calendars, cal)} (${cal}) of destination ${nameOf(dests, dest)} (${dest})`
   }
 
   return (
@@ -73,18 +86,22 @@ export default function Settings({ prefs, onPrefs, onSaved }) {
       <Divider />
       {loadError && <Alert color="yellow" title="A config file could not be loaded; the previous settings are still running">{loadError}</Alert>}
       {pendingRestart && <Text size="sm" c="orange">Restart to apply server changes</Text>}
-      {error && !drawerOpen && <Text size="sm" c="red">{error}</Text>}
-      <Title order={4}>Sources</Title>
-      <Text size="sm" c="dimmed">{(sources || []).length} configured</Text>
-      <Button size="xs" onClick={() => openAdd('source')}>Add source</Button>
-      <ul>{(sources || []).map(s => <li key={s.id}>{s.label || s.id} ({s.type}, {s.has_secret ? 'credential set' : 'no credential'}) <Button size="xs" variant="subtle" onClick={() => openEdit('source', s)}>Edit</Button></li>)}</ul>
-      <Button size="xs" variant="light" onClick={() => window.open('/calendar.ics', '_blank')}>Export ICS</Button>
+      {error && <Text size="sm" c="red">{error}</Text>}
+      <Title order={4}>Accounts, calendars and destinations</Title>
+      <Text size="sm" c="dimmed">
+        These lists are read-only for now. Adding and editing accounts, calendars and destinations
+        is not available in the app yet (a Settings update will add it); until then, edit
+        config/calendars.yaml. You can delete an entry here; deleting an account or calendar also
+        removes what depends on it, and you will see exactly what before you confirm.
+      </Text>
 
-      <Divider />
-      <Title order={4}>Destinations</Title>
-      <Text size="sm" c="dimmed">{(dests || []).length} configured</Text>
-      <Button size="xs" onClick={() => openAdd('destination')}>Add destination</Button>
-      <ul>{(dests || []).map(d => <li key={d.id + '|' + d.calendar_id}>{d.id}/{d.calendar_id} <Button size="xs" variant="subtle" onClick={() => openEdit('destination', d)}>Edit</Button></li>)}</ul>
+      <Title order={5}>Accounts</Title>
+      <ItemList collection="accounts" items={accounts} onDelete={askDelete} />
+      <Title order={5}>Calendars</Title>
+      <ItemList collection="calendars" items={calendars} onDelete={askDelete} />
+      <Title order={5}>Destinations</Title>
+      <ItemList collection="destinations" items={dests} onDelete={askDelete} />
+      <Button size="xs" variant="light" onClick={() => window.open('/calendar.ics', '_blank')}>Export ICS</Button>
 
       <Divider />
       <Title order={4}>Notifications</Title>
@@ -93,30 +110,23 @@ export default function Settings({ prefs, onPrefs, onSaved }) {
       <Switch label="Generated events" defaultChecked />
       <Switch label="Calendar shifts" defaultChecked />
 
-      {/* Right drawer for complex add flows */}
-      <Drawer opened={drawerOpen} onClose={() => setDrawerOpen(false)} title={`${editing ? 'Edit' : 'Add'} ${drawerType}`} position="right" size="md">
-        <Stack>
-          {error && <Text size="sm" c="red">{error}</Text>}
-          {drawerType === 'source' && (
-            <>
-              <TextInput label="ID (auto)" value={form.id || ''} disabled />
-              <TextInput label="Label" value={form.label || ''} onChange={e => setForm({ ...form, label: e.target.value })} />
-              <Select label="Type" data={['google','outlook','caldav','ics']} value={form.type} onChange={v => setForm({ ...form, type: v })} />
-              {editing && <Text size="sm" c="dimmed">Credential: {editing.has_secret ? 'set (not shown)' : 'not set'}. Credentials are configured outside the UI.</Text>}
-              <Button onClick={saveSource}>Save</Button>
-              {editing && <Button color="red" variant="light" onClick={remove}>Delete</Button>}
-            </>
-          )}
-          {drawerType === 'destination' && (
-            <>
-              <TextInput label="ID" value={form.id || ''} disabled={!!editing} onChange={e => setForm({ ...form, id: e.target.value })} />
-              <TextInput label="Calendar ID" value={form.calendar_id || ''} disabled={!!editing} onChange={e => setForm({ ...form, calendar_id: e.target.value })} />
-              {!editing && <Button onClick={saveDest}>Save</Button>}
-              {editing && <Button color="red" variant="light" onClick={remove}>Delete</Button>}
-            </>
-          )}
-        </Stack>
-      </Drawer>
+      <Modal opened={!!confirm} onClose={() => setConfirm(null)} title={confirm ? `Delete ${COLLECTION_NAMES[confirm.collection]} ${confirm.item.name || confirm.item.id}?` : ''}>
+        {confirm && (
+          <Stack>
+            <Text size="sm">id: {confirm.item.id}</Text>
+            {confirm.pruned.length > 0 ? (
+              <>
+                <Text size="sm">This will also remove:</Text>
+                <ul>{confirm.pruned.map(p => <li key={p.kind + ':' + p.id}>{describe(p)}</li>)}</ul>
+              </>
+            ) : <Text size="sm">Nothing else depends on it.</Text>}
+            <Group justify="flex-end">
+              <Button variant="default" onClick={() => setConfirm(null)}>Cancel</Button>
+              <Button color="red" loading={busy} onClick={doDelete}>Delete</Button>
+            </Group>
+          </Stack>
+        )}
+      </Modal>
     </Stack>
   )
 }

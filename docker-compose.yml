@@ -32,11 +32,11 @@ services:
       # Overrides agent.base_url in config/planner.yaml.
       FOCACAL_AGENT_BASE_URL: "${FOCACAL_AGENT_BASE_URL:-http://host.docker.internal:11434/v1}"
 
-      # Google OAuth credentials (required if you have a google source).
+      # Google OAuth credentials (required if you have a google account).
       GOOGLE_CLIENT_ID: "${GOOGLE_CLIENT_ID:-}"
       GOOGLE_CLIENT_SECRET: "${GOOGLE_CLIENT_SECRET:-}"
 
-      # Microsoft/Outlook OAuth credentials (required if you have an outlook source).
+      # Microsoft/Outlook OAuth credentials (required if you have an outlook account).
       OUTLOOK_CLIENT_ID: "${OUTLOOK_CLIENT_ID:-}"
       OUTLOOK_CLIENT_SECRET: "${OUTLOOK_CLIENT_SECRET:-}"
 

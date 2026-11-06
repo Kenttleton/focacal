@@ -24,6 +24,11 @@
 #     account: work-google
 #     remote_id: primary
 #     plan: true             # false = shown, but not planned around
+#   - id: team-shared
+#     name: Team calendar
+#     account: work-google
+#     remote_id: team@example.com
+#     plan: false            # a write target, not something to plan around
 #   - id: team-feed
 #     name: Team feed
 #     url_env: FOCACAL_ICS_TEAM_FEED  # feed URL lives in .env; if unset,
@@ -52,6 +57,17 @@ destinations:
 #           title: {visibility: true, rename: Busy}
 #     target:
 #       calendar: team-shared
+#   # A second served feed at /calendar/busy/ that shows only busy time.
+#   # (auth: public is not available yet; private is the default.)
+#   - id: busy
+#     name: Busy only
+#     inputs:
+#       - calendar: work
+#         event:
+#           title: {visibility: false}
+#     target:
+#       served: true
+#       auth: private
 
 # OAuth redirect base. Defaults shown; uncomment to change. Also configurable
 # via the OAUTH_REDIRECT_BASE_URL env var.

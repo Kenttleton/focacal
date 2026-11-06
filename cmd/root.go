@@ -22,8 +22,8 @@ var rootCmd = &cobra.Command{
 to plan focus blocks and lunch, and serves the result as a CalDAV feed and REST API.
 
 Run 'focacal start' to launch all services.
-Run 'focacal auth google <source-id>' to authorize a Google Calendar source.
-Run 'focacal auth outlook <source-id>' to authorize an Outlook source.`,
+Run 'focacal auth google <account-id>' to authorize a Google Calendar account.
+Run 'focacal auth outlook <account-id>' to authorize an Outlook account.`,
 }
 
 // Execute runs the root command.
