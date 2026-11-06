@@ -299,8 +299,16 @@ func (s *Service) update(d Domain, opts PatchOptions, prep func(doc map[string]a
 			// than tagging this error.
 			return nil, err
 		}
-		if err := d.validate(cfg); err != nil {
-			return nil, fmt.Errorf("%w: %w", ErrValidation, err)
+		var verr error
+		if d == DomainCalendars {
+			// Dangling references the file already had are not this
+			// request's fault: reject only the new ones.
+			verr = cfg.ValidateCalendarsAllowing(s.existingDangling(cur))
+		} else {
+			verr = d.validate(cfg)
+		}
+		if verr != nil {
+			return nil, fmt.Errorf("%w: %w", ErrValidation, verr)
 		}
 		out, err := marshalDomain(d, cfg)
 		if err != nil {
@@ -330,6 +338,22 @@ func (s *Service) update(d Domain, opts PatchOptions, prep func(doc map[string]a
 	}
 	v.Pruned = pruned
 	return v, nil
+}
+
+// existingDangling lists the dangling references of the calendars file as it
+// is before a patch (cur), with the other domains as on disk. A file that
+// does not load yields none, so everything stays strict.
+func (s *Service) existingDangling(cur []byte) []string {
+	files, err := readDomainFiles(s.dir)
+	if err != nil {
+		return nil
+	}
+	files[DomainCalendars] = cur
+	cfg, err := loadFiles(files)
+	if err != nil {
+		return nil
+	}
+	return cfg.DanglingRefs()
 }
 
 // collectionIDs returns the ids of every collection of d present in doc.

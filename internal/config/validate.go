@@ -128,10 +128,18 @@ func (c *Config) ValidatePlanner() error {
 // ValidateCalendars is the strict calendars validator, used for API changes:
 // structural errors, dangling references and cycles are all errors. Messages
 // name ids and never echo values, since values can be secrets.
-func (c *Config) ValidateCalendars() error {
+func (c *Config) ValidateCalendars() error { return c.ValidateCalendarsAllowing(nil) }
+
+// ValidateCalendarsAllowing is ValidateCalendars except that the dangling
+// references listed in existing (messages from DanglingRefs of the file
+// before a patch) are tolerated: only new ones are errors. Structure and
+// cycle errors stay strict.
+func (c *Config) ValidateCalendarsAllowing(existing []string) error {
 	errs := c.calendarStructureErrors()
 	for _, m := range c.DanglingRefs() {
-		errs = append(errs, errors.New(m))
+		if !slices.Contains(existing, m) {
+			errs = append(errs, errors.New(m))
+		}
 	}
 	errs = append(errs, c.cycleErrors()...)
 	return errors.Join(errs...)

@@ -237,8 +237,12 @@ destinations:
 		t.Fatal(err)
 	}
 	svc, _ := newTestService(t, dir)
-	// Strict validation still rejects a patch while a dangling ref remains.
-	if _, err := svc.Patch(DomainCalendars, []byte(`{"calendars":{"b":null}}`), PatchOptions{}); !errors.Is(err, ErrValidation) {
+	// Ruling 24: a pre-existing dangling ref does not block an unrelated delete.
+	if _, err := svc.Patch(DomainCalendars, []byte(`{"calendars":{"b":null}}`), PatchOptions{DryRun: true}); err != nil {
+		t.Fatalf("unrelated delete with a pre-existing dangling ref: %v", err)
+	}
+	// A patch that adds a new dangling ref is still rejected.
+	if _, err := svc.Patch(DomainCalendars, []byte(`{"destinations":{"d":{"inputs":[{"calendar":"a"},{"calendar":"ghost"},{"calendar":"ghost2"}]}}}`), PatchOptions{DryRun: true}); !errors.Is(err, ErrValidation) {
 		t.Fatalf("err = %v", err)
 	}
 	// pruneCascade itself only touches references to what was deleted.

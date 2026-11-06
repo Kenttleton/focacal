@@ -64,7 +64,7 @@ func MigrateCalendarModel(dir string) (migrated bool, err error) {
 // Each source becomes an account (same id, name from label) with one calendar
 // per calendar_ids entry; the first keeps the source id, later ones get
 // <source>-<slug(remote id)>. An ics source becomes an account-less calendar.
-// Legacy destinations are carried over best effort and a destination serving
+// Legacy destinations are carried over best effort (an omitted event block becomes an explicit all-hidden one; a destination left with no inputs stays empty and is warned about) and a destination serving
 // `focacal` is added when none exists. Other top-level keys (oauth) and the
 // file's header comment are kept. The original is saved as calendars.yaml.bak
 // (0600: it may hold inline secrets) before the file is replaced atomically.
@@ -311,8 +311,16 @@ func (m *calendarMigration) addDestination(d legacyDestination) {
 	}
 	m.destIDs[strings.ToLower(dest.ID)] = true
 	for _, in := range d.Sources {
+		// Legacy semantics: an omitted event block means "visibility: false"
+		// for title and body (obscure both). In the new model nil means full
+		// visibility, so make the legacy default explicit. A present block
+		// with one half omitted already hides that half.
+		ev := in.Event
+		if ev == nil {
+			ev = &EventVisibility{}
+		}
 		if in.ID == "focacal" {
-			dest.Inputs.Items = append(dest.Inputs.Items, DestinationInput{Calendar: "focacal", Event: in.Event})
+			dest.Inputs.Items = append(dest.Inputs.Items, DestinationInput{Calendar: "focacal", Event: ev})
 			continue
 		}
 		cal, ok := m.resolveCalendar(in.ID, in.CalendarID)
@@ -325,14 +333,12 @@ func (m *calendarMigration) addDestination(d legacyDestination) {
 			m.log.Warn("migrate: legacy destination input that names the destination's own target was dropped", "destination", d.ID)
 			continue
 		}
-		dest.Inputs.Items = append(dest.Inputs.Items, DestinationInput{Calendar: cal, Event: in.Event})
+		dest.Inputs.Items = append(dest.Inputs.Items, DestinationInput{Calendar: cal, Event: ev})
 	}
 	if len(dest.Inputs.Items) == 0 {
-		// Least privilege: never widen to source calendars the user did not list.
-		if len(d.Sources) > 0 {
-			m.log.Warn("migrate: every input of a legacy destination was dropped; it now takes only focacal", "destination", d.ID)
-		}
-		dest.Inputs.Items = []DestinationInput{{Calendar: "focacal"}}
+		// Never grant write scope the user did not configure: an empty or
+		// fully dropped destination publishes nothing until inputs are added.
+		m.log.Warn("migrate: legacy destination has no usable inputs; it publishes nothing until you add inputs", "destination", d.ID)
 	}
 	m.destinations = append(m.destinations, dest)
 }

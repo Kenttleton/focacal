@@ -455,9 +455,9 @@ func destInputs(t *testing.T, cfg *Config, id string) []DestinationInput {
 	return d.Inputs.Items
 }
 
-func onlyFocacal(in []DestinationInput) bool { return len(in) == 1 && in[0].Calendar == "focacal" }
+func noInputs(in []DestinationInput) bool { return len(in) == 0 }
 
-func TestMigrateDestinationOnlySelfInputGetsFocacalOnly(t *testing.T) {
+func TestMigrateDestinationOnlySelfInputGetsNoInputs(t *testing.T) {
 	dir, warns, _ := migrateCal(t, `sources:
   - id: work-google
     type: google
@@ -470,8 +470,8 @@ destinations:
       - id: work-google
 `)
 	cfg := loadCal(t, dir)
-	if in := destInputs(t, cfg, "work-google"); !onlyFocacal(in) {
-		t.Errorf("inputs = %+v, want only focacal", in)
+	if in := destInputs(t, cfg, "work-google"); !noInputs(in) {
+		t.Errorf("inputs = %+v, want none (Ruling 20)", in)
 	}
 	if !strings.Contains(warns, "destination=work-google") {
 		t.Errorf("warnings = %q", warns)
@@ -490,7 +490,7 @@ destinations:
       - id: nada
 `)
 	cfg := loadCal(t, dir)
-	if in := destInputs(t, cfg, "out"); !onlyFocacal(in) {
+	if in := destInputs(t, cfg, "out"); !noInputs(in) {
 		t.Errorf("inputs = %+v", in)
 	}
 	if !strings.Contains(warns, "destination=out") || strings.Contains(warns, "nope") {
@@ -499,7 +499,7 @@ destinations:
 }
 
 func TestMigrateDestinationEmptySourcesGetFocacalOnly(t *testing.T) {
-	dir, _, _ := migrateCal(t, `sources:
+	dir, warns, _ := migrateCal(t, `sources:
   - id: work
     type: google
 destinations:
@@ -511,8 +511,11 @@ destinations:
 `)
 	cfg := loadCal(t, dir)
 	for _, id := range []string{"out", "out2"} {
-		if in := destInputs(t, cfg, id); !onlyFocacal(in) {
+		if in := destInputs(t, cfg, id); !noInputs(in) {
 			t.Errorf("%s inputs = %+v", id, in)
+		}
+		if !strings.Contains(warns, "destination="+id) {
+			t.Errorf("no warning names %s: %q", id, warns)
 		}
 	}
 }
@@ -597,5 +600,40 @@ func TestMigrateDuplicateSourceIDErrors(t *testing.T) {
 	}
 	if _, err := os.Stat(p + ".bak"); err == nil {
 		t.Error(".bak written")
+	}
+}
+
+// Ruling 22: a legacy omitted event block means obscure both; the new model
+// reads nil as full visibility, so the migration must write the hidden block.
+func TestMigrateOmittedEventBlockBecomesExplicitlyHidden(t *testing.T) {
+	dir, _, _ := migrateCal(t, `sources:
+  - id: work
+    type: google
+  - id: other
+    type: google
+destinations:
+  - id: personal
+    type: caldav
+    caldav_url: https://dav.example.test
+    sources:
+      - id: work
+      - id: focacal
+      - id: other
+        event:
+          body: {visibility: true}
+`)
+	cfg := loadCal(t, dir)
+	in := destInputs(t, cfg, "personal")
+	if len(in) != 3 {
+		t.Fatalf("inputs = %+v", in)
+	}
+	for _, i := range in[:2] {
+		if i.Event == nil || i.Event.Title.Visibility || i.Event.Body.Visibility {
+			t.Errorf("input %s: event = %+v, want an explicit hidden block", i.Calendar, i.Event)
+		}
+	}
+	// A partial block hides the omitted half.
+	if e := in[2].Event; e == nil || e.Title.Visibility || !e.Body.Visibility {
+		t.Errorf("partial block = %+v, want title hidden, body shown", e)
 	}
 }

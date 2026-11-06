@@ -403,6 +403,31 @@ func TestPatchDanglingRefFailsAndUnreferencedDeleteWorks(t *testing.T) {
 	}
 }
 
+// Ruling 24: a hand-edited dangling reference must not block unrelated edits;
+// only references a patch adds are rejected.
+func TestPatchToleratesPreExistingDanglingRef(t *testing.T) {
+	dir := writeTestDir(t)
+	p := filepath.Join(dir, "calendars.yaml")
+	b, _ := os.ReadFile(p)
+	b = append(b, []byte(`  - id: orphan
+    inputs:
+      - calendar: removed-by-hand
+    target: {served: true}
+`)...)
+	if err := os.WriteFile(p, b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	svc, _ := newTestService(t, dir)
+	if _, err := svc.Patch(DomainCalendars, []byte(`{"calendars":{"plain":null}}`), PatchOptions{}); err != nil {
+		t.Fatalf("unrelated delete blocked by a pre-existing dangling ref: %v", err)
+	}
+	// A NEW dangling reference still fails.
+	_, err := svc.Patch(DomainCalendars, []byte(`{"calendars":{"ghost-ref":{"account":"nope"}}}`), PatchOptions{})
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("err = %v, want ErrValidation", err)
+	}
+}
+
 func TestPatchRejectsInlineSecrets(t *testing.T) {
 	cases := map[string]struct {
 		domain Domain
