@@ -141,3 +141,29 @@ func TestIngestSkipsOwnWrite(t *testing.T) {
 		t.Fatal("ledger leaked across calendars")
 	}
 }
+
+// Ruling 23: the same item key written to two calendars of one destination
+// keeps both rows (a retarget must not overwrite the old target's row).
+func TestLedgerSameItemKeyOnTwoCalendarsKeepsBoth(t *testing.T) {
+	db := openLedgerDB(t)
+	ctx := context.Background()
+	now := time.Now()
+	for _, cal := range []string{"a", "b"} {
+		if err := db.LedgerPut(ctx, LedgerEntry{CalendarID: cal, RemoteID: "r-" + cal, DestinationID: "d",
+			ItemKey: "k", Hash: "h", StartsAt: now, EndsAt: now.Add(time.Hour)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows, err := db.LedgerByDestination(ctx, "d")
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("rows = %v, err = %v; want both calendars' rows", rows, err)
+	}
+	// Same calendar and key still replaces.
+	if err := db.LedgerPut(ctx, LedgerEntry{CalendarID: "a", RemoteID: "r-a2", DestinationID: "d",
+		ItemKey: "k", Hash: "h2", StartsAt: now, EndsAt: now.Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	if rows, _ := db.LedgerByDestination(ctx, "d"); len(rows) != 2 {
+		t.Fatalf("rows after same-calendar replace = %d, want 2", len(rows))
+	}
+}

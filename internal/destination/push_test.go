@@ -28,6 +28,7 @@ type fakeConn struct {
 	writes []connector.RemoteEvent
 	dels   []string
 	failW  bool
+	failD  bool // deletes fail
 	seq    int
 
 	updateGone bool   // updates fail with ErrNotFound (remote event deleted)
@@ -73,6 +74,9 @@ func (f *fakeConn) WriteEvent(_ context.Context, e *connector.RemoteEvent) (stri
 func (f *fakeConn) DeleteEvent(_ context.Context, id string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.failD {
+		return errors.New("delete boom https://secret.test/?token=hunter2")
+	}
 	f.dels = append(f.dels, id)
 	delete(f.remote, id)
 	return nil
@@ -732,5 +736,223 @@ func TestPusherNeverDeletesRowsWithZeroTimes(t *testing.T) {
 	}
 	if len(w.dels) != 0 || e.count(t) != 2 {
 		t.Fatalf("zero-time rows deleted: dels=%v ledger=%d", w.dels, e.count(t))
+	}
+}
+
+// Ruling 21: a replan that MOVES most blocks must replace them, not pile up
+// copies. The guard trips only when the projection itself collapsed.
+func TestPusherReshuffleReplacesBlocksWithoutDuplicates(t *testing.T) {
+	e := newEnv(t, baseCfg+outFocacal, "work")
+	ctx := context.Background()
+	for i := 0; i < 10; i++ {
+		e.block(t, fmt.Sprintf("b%d", i), "Focus", time.Duration(i+1)*2*time.Hour)
+	}
+	if err := e.p.Notify(ctx); err != nil {
+		t.Fatal(err)
+	}
+	w := e.conns["work"]
+	for round := 1; round <= 2; round++ {
+		// Move 6 of the 10 blocks by half an hour each round.
+		for i := 0; i < 6; i++ {
+			_ = e.db.DeleteBlock(ctx, fmt.Sprintf("b%d", i))
+			e.block(t, fmt.Sprintf("b%d", i), "Focus", time.Duration(i+1)*2*time.Hour+time.Duration(round)*30*time.Minute)
+		}
+		if err := e.p.Notify(ctx); err != nil {
+			t.Fatalf("round %d: %v", round, err)
+		}
+		if len(w.remote) != 10 || e.count(t) != 10 {
+			t.Fatalf("round %d: remote=%d ledger=%d, want 10 each (no duplicates, no stale rows)", round, len(w.remote), e.count(t))
+		}
+	}
+	if len(w.dels) != 12 {
+		t.Fatalf("dels = %d, want 12", len(w.dels))
+	}
+}
+
+// A wiped store (empty projection) must never mass-delete remote events.
+func TestPusherCollapsedProjectionDeletesNothing(t *testing.T) {
+	e := newEnv(t, baseCfg+outFocacal, "work")
+	ctx := context.Background()
+	for i := 0; i < 10; i++ {
+		e.block(t, fmt.Sprintf("b%d", i), "Focus", time.Duration(i+1)*2*time.Hour)
+	}
+	if err := e.p.Notify(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 10; i++ {
+		_ = e.db.DeleteBlock(ctx, fmt.Sprintf("b%d", i))
+	}
+	if err := e.p.Notify(ctx); err == nil {
+		t.Fatal("a guarded push should report failure")
+	}
+	if w := e.conns["work"]; len(w.dels) != 0 || len(w.remote) != 10 || e.count(t) != 10 {
+		t.Fatalf("collapsed projection deleted: dels=%d remote=%d ledger=%d", len(w.dels), len(w.remote), e.count(t))
+	}
+}
+
+// Ruling 21: a config-changed push that fails keeps its guard exemption.
+func TestPusherFailedConfigChangePushKeepsExemption(t *testing.T) {
+	e := newEnv(t, baseCfg+outFocacal, "work")
+	ctx := context.Background()
+	for i := 0; i < 8; i++ {
+		e.block(t, fmt.Sprintf("b%d", i), "Focus", time.Duration(i+1)*2*time.Hour)
+	}
+	if err := e.p.Notify(ctx); err != nil {
+		t.Fatal(err)
+	}
+	w := e.conns["work"]
+	e.rewriteConfig(t, baseCfg+outFeed) // every ledger row becomes a removal
+	w.failD = true
+	if err := e.p.Notify(ctx); err == nil {
+		t.Fatal("deletes failed; push should report failure")
+	}
+	if e.count(t) != 8 {
+		t.Fatalf("ledger = %d after failed deletes", e.count(t))
+	}
+	w.failD = false
+	if err := e.p.Notify(ctx); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	if len(w.dels) != 8 || e.count(t) != 0 {
+		t.Fatalf("retry should delete under the exemption: dels=%d ledger=%d", len(w.dels), e.count(t))
+	}
+}
+
+const outThird = `  - id: out
+    inputs: [{calendar: focacal}]
+    target: {calendar: third}
+`
+
+// Ruling 23: after a retarget, a failed delete on the old calendar must keep
+// the old rows tracked until a later push succeeds.
+func TestPusherRetargetKeepsOldRowsUntilDeleted(t *testing.T) {
+	e := newEnv(t, baseCfg+outFocacal, "work", "third")
+	ctx := context.Background()
+	e.block(t, "b1", "Focus", time.Hour)
+	e.block(t, "b2", "Focus", 3*time.Hour)
+	if err := e.p.Notify(ctx); err != nil {
+		t.Fatal(err)
+	}
+	a, b := e.conns["work"], e.conns["third"]
+	e.rewriteConfig(t, baseCfg+outThird)
+	a.failD = true
+	if err := e.p.Notify(ctx); err == nil {
+		t.Fatal("old-target delete failed; push should report failure")
+	}
+	if len(b.remote) != 2 {
+		t.Fatalf("new target has %d events, want 2", len(b.remote))
+	}
+	led, _ := e.db.LedgerByDestination(ctx, "out")
+	perCal := map[string]int{}
+	for _, l := range led {
+		perCal[l.CalendarID]++
+	}
+	if perCal["work"] != 2 || perCal["third"] != 2 {
+		t.Fatalf("ledger rows per calendar = %v, want old rows still tracked", perCal)
+	}
+	a.failD = false
+	if err := e.p.Notify(ctx); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	led, _ = e.db.LedgerByDestination(ctx, "out")
+	if len(a.remote) != 0 || len(b.remote) != 2 || len(led) != 2 || len(b.writes) != 2 {
+		t.Fatalf("after retry: old=%d new=%d ledger=%d newWrites=%d", len(a.remote), len(b.remote), len(led), len(b.writes))
+	}
+}
+
+const googleCfg = `accounts:
+  - id: gacct
+    type: google
+    credentials_file: /nonexistent/creds.json
+calendars:
+  - id: gcal
+    account: gacct
+    remote_id: primary
+destinations:
+  - id: out
+    inputs: [{calendar: focacal}]
+    target: {calendar: gcal}
+`
+
+// Ruling 25: push to google/outlook cannot work (read-only scopes), so it is
+// skipped with one warning per destination instead of failing every cycle.
+func TestPusherSkipsGoogleTargetAndWarnsOnce(t *testing.T) {
+	e := newEnv(t, googleCfg, "gcal")
+	ctx := context.Background()
+	e.block(t, "b1", "Focus", time.Hour)
+	for i := 0; i < 3; i++ {
+		if err := e.p.Notify(ctx); err != nil {
+			t.Fatalf("notify %d: %v", i, err)
+		}
+	}
+	g := e.conns["gcal"]
+	if len(g.writes) != 0 || len(g.dels) != 0 || e.count(t) != 0 {
+		t.Fatalf("google target was written: writes=%d dels=%d", len(g.writes), len(g.dels))
+	}
+	if n := strings.Count(e.logs.String(), "not writable yet"); n != 1 {
+		t.Fatalf("warned %d times, want once: %s", n, e.logs.String())
+	}
+	if !strings.Contains(e.logs.String(), "destination=out") {
+		t.Errorf("warning does not name the destination: %s", e.logs.String())
+	}
+}
+
+// Ruling 20: a destination with empty inputs loads, validates and publishes
+// nothing.
+func TestPusherEmptyInputsPushesNothing(t *testing.T) {
+	e := newEnv(t, baseCfg+`  - id: out
+    inputs: []
+    target: {calendar: work}
+`, "work")
+	ctx := context.Background()
+	e.block(t, "b1", "Focus", time.Hour)
+	e.event(t, "feed", "x", "Meeting", time.Hour)
+	if err := e.live.Current().ValidateCalendars(); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.p.Notify(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if w := e.conns["work"]; len(w.writes) != 0 || e.count(t) != 0 {
+		t.Fatalf("empty inputs wrote %d events", len(w.writes))
+	}
+}
+
+// Ruling 22: a legacy destination whose source has no event block must
+// publish Busy, never the real title.
+func TestMigratedLegacyDestinationPublishesBusy(t *testing.T) {
+	dir := t.TempDir()
+	legacy := `sources:
+  - id: work
+    type: caldav
+    caldav_url: https://cal.test
+destinations:
+  - id: personal
+    type: caldav
+    caldav_url: https://other.test
+    sources:
+      - id: work
+`
+	if err := os.WriteFile(filepath.Join(dir, "calendars.yaml"), []byte(legacy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.MigrateCalendarModelLog(dir, slog.New(slog.DiscardHandler)); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.LoadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var d config.DestinationConfig
+	for _, x := range cfg.Destinations {
+		if x.ID == "personal" {
+			d = x
+		}
+	}
+	ev := &store.Event{ID: "e1", SourceID: "work", CalendarID: "primary", UID: "u", Title: "Secret meeting",
+		Description: "private notes", Location: "Room 1", ConferenceURL: "https://meet.test/x"}
+	pe, _ := Project(cfg, d, []*store.Event{ev}, nil)
+	if len(pe) != 1 || pe[0].Title != "Busy" || pe[0].Description != "" || pe[0].Location != "" || pe[0].ConferenceURL != "" {
+		t.Fatalf("migrated destination leaks: %+v", pe)
 	}
 }

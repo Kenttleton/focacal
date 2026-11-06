@@ -34,9 +34,10 @@ type Pusher struct {
 	log        *slog.Logger
 	now        func() time.Time
 
-	mu    sync.Mutex
-	locks map[string]*sync.Mutex // per destination id
-	fps   map[string]string      // last pushed config fingerprint per destination
+	mu     sync.Mutex
+	locks  map[string]*sync.Mutex // per destination id
+	fps    map[string]string      // config fingerprint of the last successful push per destination
+	warned map[string]bool        // destinations already warned about an unwritable target type
 }
 
 // NewPusher builds a Pusher. lockSource takes the per-calendar lock the
@@ -48,7 +49,7 @@ func NewPusher(live *config.Live, lookup ConnectorLookup, lockSource func(calend
 		log = slog.New(slog.DiscardHandler)
 	}
 	return &Pusher{live: live, lookup: lookup, lockSource: lockSource, db: db, log: log,
-		now: time.Now, locks: map[string]*sync.Mutex{}, fps: map[string]string{}}
+		now: time.Now, locks: map[string]*sync.Mutex{}, fps: map[string]string{}, warned: map[string]bool{}}
 }
 
 func (p *Pusher) destLock(id string) *sync.Mutex {
@@ -147,15 +148,23 @@ func (p *Pusher) pushOne(ctx context.Context, id string) (err error) {
 	fp := fingerprint(cfg, d)
 	p.mu.Lock()
 	prevFP, seen := p.fps[id]
-	p.fps[id] = fp
 	p.mu.Unlock()
 	configChanged := seen && prevFP != fp
 
+	if !p.providerWritable(cfg, d) {
+		return nil
+	}
 	if !writableTarget(cfg, target) {
 		return errors.New("target not writable")
 	}
+	// The target lock is released before old-target deletes take their own,
+	// so two destinations retargeting in opposite directions cannot deadlock.
+	var unlockOnce sync.Once
+	unlockTarget := func() {}
 	if p.lockSource != nil {
-		defer p.lockSource(target)()
+		unlock := p.lockSource(target)
+		unlockTarget = func() { unlockOnce.Do(unlock) }
+		defer unlockTarget()
 	}
 	conn, ok := p.lookup(target)
 	if !ok {
@@ -203,7 +212,11 @@ func (p *Pusher) pushOne(ctx context.Context, id string) (err error) {
 	}
 	byKey := make(map[string]store.LedgerEntry, len(ledger))
 	for _, le := range ledger {
-		byKey[le.ItemKey] = le
+		// Only rows of the current target are updated in place; rows of an
+		// earlier target are deleted (below) and keep their rows until then.
+		if le.CalendarID == target {
+			byKey[le.ItemKey] = le
+		}
 	}
 
 	failed := false
@@ -222,9 +235,6 @@ func (p *Pusher) pushOne(ctx context.Context, id string) (err error) {
 	for _, it := range items {
 		wanted[it.key] = true
 		prev, had := byKey[it.key]
-		if had && prev.CalendarID != target {
-			had = false // written to an earlier target; stale rows are handled below
-		}
 		if had && prev.Hash == it.hash {
 			continue // unchanged: idempotent
 		}
@@ -272,28 +282,50 @@ func (p *Pusher) pushOne(ctx context.Context, id string) (err error) {
 		}
 		inWindow++
 	}
-	if len(removals) > maxRemovalsUnchecked && len(removals)*2 > inWindow && !configChanged {
+	// Mass-delete guard (ruling 21): trip only when the projection itself
+	// collapsed (a wiped store or a broken input), not when items moved, which
+	// turns the same number of rows into removals while the projection stays
+	// as large as the ledger.
+	if len(removals) > maxRemovalsUnchecked && len(items)*2 < inWindow && !configChanged {
 		p.log.Warn("push skipped deletes: too many removals at once", "destination", d.ID)
 		removals = nil
 		failed = true
 	}
-	for _, le := range removals {
-		c := conn
-		if le.CalendarID != target {
-			var ok bool
-			if c, ok = p.lookup(le.CalendarID); !ok {
-				// The old target is gone; nothing remote to delete.
-				le := le
-				record(func(cc context.Context) error { return p.db.LedgerDelete(cc, le.CalendarID, le.RemoteID) })
-				continue
-			}
-		}
+	del := func(c connector.Connector, le store.LedgerEntry) {
 		if derr := c.DeleteEvent(ctx, le.RemoteID); derr != nil {
 			failed = true
+			return
+		}
+		record(func(cc context.Context) error { return p.db.LedgerDelete(cc, le.CalendarID, le.RemoteID) })
+	}
+	var oldTarget []store.LedgerEntry
+	for _, le := range removals {
+		if le.CalendarID != target {
+			oldTarget = append(oldTarget, le)
 			continue
 		}
-		le := le
-		record(func(cc context.Context) error { return p.db.LedgerDelete(cc, le.CalendarID, le.RemoteID) })
+		del(conn, le)
+	}
+	unlockTarget()
+	for _, le := range oldTarget {
+		c, ok := p.lookup(le.CalendarID)
+		if !ok {
+			// The old target is gone; nothing remote to delete.
+			le := le
+			record(func(cc context.Context) error { return p.db.LedgerDelete(cc, le.CalendarID, le.RemoteID) })
+			continue
+		}
+		func() {
+			if p.lockSource != nil {
+				defer p.lockSource(le.CalendarID)()
+			}
+			del(c, le)
+		}()
+	}
+	if !failed {
+		p.mu.Lock()
+		p.fps[id] = fp // only a fully successful push spends the config-change exemption
+		p.mu.Unlock()
 	}
 	if failed {
 		return errors.New("some writes failed")
@@ -310,4 +342,30 @@ func writableTarget(cfg *config.Config, id string) bool {
 		}
 	}
 	return false
+}
+
+// providerWritable reports whether the target's account type can be written
+// to yet. Google and Outlook are connected with read-only OAuth scopes, so a
+// write would only fail every cycle: skip such a destination, warning once per
+// destination per process (id and reason only).
+func (p *Pusher) providerWritable(cfg *config.Config, d config.DestinationConfig) bool {
+	var acct string
+	for _, c := range cfg.Calendars {
+		if c.ID == d.Target.Calendar {
+			acct = c.Account
+		}
+	}
+	for _, a := range cfg.Accounts {
+		if a.ID == acct && (a.Type == "google" || a.Type == "outlook") {
+			p.mu.Lock()
+			first := !p.warned[d.ID]
+			p.warned[d.ID] = true
+			p.mu.Unlock()
+			if first {
+				p.log.Warn("push destination skipped: target type is not writable yet", "destination", d.ID)
+			}
+			return false
+		}
+	}
+	return true
 }

@@ -101,7 +101,7 @@ CREATE TABLE IF NOT EXISTS write_ledger (
 	ends_at        DATETIME NOT NULL,
 	written_at     DATETIME NOT NULL,
 	PRIMARY KEY (calendar_id, remote_id),
-	UNIQUE (destination_id, item_key)
+	UNIQUE (destination_id, calendar_id, item_key)
 );
 `
 
