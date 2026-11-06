@@ -146,5 +146,40 @@ func migrate(db *sql.DB) error {
 			}
 		}
 	}
-	return nil
+	return migrateVersion(db)
+}
+
+// schemaVersion is the current PRAGMA user_version.
+const schemaVersion = 2
+
+// migrateVersion runs the versioned one-time steps. Version 2 is the calendar
+// model: events and sync_state are keyed by the old source ids, so they are
+// caches to rebuild; blocks keep their rows but lose references into them
+// (source_event_id, and written_back, which is keyed by source id).
+// oauth_tokens are kept. A database created fresh has nothing to reset and
+// ends at the current version.
+func migrateVersion(db *sql.DB) error {
+	var v int
+	if err := db.QueryRow(`PRAGMA user_version`).Scan(&v); err != nil {
+		return fmt.Errorf("read user_version: %w", err)
+	}
+	if v >= schemaVersion {
+		return nil
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, q := range []string{
+		`DELETE FROM events`,
+		`DELETE FROM sync_state`,
+		`UPDATE blocks SET source_event_id = NULL, written_back = '{}'`,
+		fmt.Sprintf(`PRAGMA user_version = %d`, schemaVersion),
+	} {
+		if _, err := tx.Exec(q); err != nil {
+			return fmt.Errorf("schema version %d: %w", schemaVersion, err)
+		}
+	}
+	return tx.Commit()
 }

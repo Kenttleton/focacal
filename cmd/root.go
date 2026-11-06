@@ -72,6 +72,16 @@ func loadConfig(log *slog.Logger) (dir string, live *config.Live, err error) {
 		log.Info("migrated legacy config.yaml to the directory layout; original kept as config.yaml.bak",
 			"dir", dir)
 	}
+	// Then the calendars model (sources/destinations to accounts/calendars/
+	// destinations). A failure stops startup: the error names the file.
+	migrated, err = config.MigrateCalendarModelLog(dir, log)
+	if err != nil {
+		return "", nil, err
+	}
+	if migrated {
+		log.Info("migrated calendars.yaml to accounts, calendars and destinations; original kept as calendars.yaml.bak",
+			"dir", dir)
+	}
 	// Fresh instance: write the sample files that are missing. After the
 	// migration, which refuses to run next to differing domain files.
 	seeded, err := config.SeedDefaults(dir, configexample.FS)

@@ -671,11 +671,30 @@ writeback:
 			t.Errorf("calendars.yaml lost %q:\n%s", want, cal)
 		}
 	}
-	// Task 4: extend to run MigrateCalendarModel and assert the converted load.
-	// Until then a calendars.yaml with a top-level sources key fails to load,
-	// naming the key.
+	// Until MigrateCalendarModel runs, a calendars.yaml with a top-level
+	// sources key fails to load, naming the key.
 	_, err := LoadDir(dir)
 	if err == nil || !strings.Contains(err.Error(), `"sources"`) || !strings.Contains(err.Error(), "restart") {
 		t.Fatalf("LoadDir = %v, want the legacy sources error", err)
+	}
+	// MigrateCalendarModel converts it and the strict decode accepts the result.
+	migrated, err := MigrateCalendarModel(dir)
+	if err != nil || !migrated {
+		t.Fatalf("MigrateCalendarModel = %v, %v", migrated, err)
+	}
+	cfg, err := LoadDir(dir)
+	if err != nil {
+		t.Fatalf("LoadDir after both migrations: %v", err)
+	}
+	if len(cfg.Accounts) != 1 || cfg.Accounts[0].ID != "work-google" || cfg.Accounts[0].Type != "google" {
+		t.Errorf("accounts = %+v", cfg.Accounts)
+	}
+	if len(cfg.Calendars) != 1 || cfg.Calendars[0].ID != "work-google" || cfg.Calendars[0].Account != "work-google" ||
+		cfg.Calendars[0].RemoteID != "primary" {
+		t.Errorf("calendars = %+v", cfg.Calendars)
+	}
+	out := readFile(t, filepath.Join(dir, "calendars.yaml"))
+	if strings.Contains(out, "writeback") || strings.Contains(out, "cross_busy") {
+		t.Errorf("obsolete keys carried into the converted file:\n%s", out)
 	}
 }
