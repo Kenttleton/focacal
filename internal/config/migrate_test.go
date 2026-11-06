@@ -34,17 +34,15 @@ colors:
 ollama:
   base_url: "http://host.docker.internal:11434" # unknown key, stays
 # Calendar sources
-accounts:
+sources:
   - id: "work-google" # unique slug
     type: "google"
-calendars:
-  - id: work
-    account: work-google
+    calendar_ids: []
 destinations:
-  - id: out
-    inputs: all
-    target:
-      served: true
+  - id: work-google
+    calendar_id: primary
+    sources:
+      - id: work-google
 server:
   caldav_port: 6232
   rest_port: 6233
@@ -98,7 +96,9 @@ func TestMigrateLegacySplitsFiles(t *testing.T) {
 	dir := writeLegacy(t, legacyYAML)
 	// What the single file meant: every domain read from the same bytes.
 	b := []byte(legacyYAML)
-	want, err := loadFiles(map[Domain][]byte{DomainApp: b, DomainPlanner: b, DomainCalendars: b})
+	// The legacy sources and destinations are not decodable any more (Task 4
+	// converts them), so compare everything else.
+	want, err := loadFiles(map[Domain][]byte{DomainApp: b, DomainPlanner: b, DomainCalendars: stripLegacyCalendars(b)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +111,7 @@ func TestMigrateLegacySplitsFiles(t *testing.T) {
 	wantKeys := map[string][]string{
 		"config.yaml":    {"ollama", "server", "auth"},
 		"planner.yaml":   {"working_hours", "lunch", "focus", "colors"},
-		"calendars.yaml": {"accounts", "calendars", "destinations", "oauth"},
+		"calendars.yaml": {"sources", "destinations", "oauth"},
 	}
 	for f, keys := range wantKeys {
 		if got := topKeys(t, readFile(t, filepath.Join(dir, f))); !reflect.DeepEqual(got, keys) {
@@ -119,9 +119,14 @@ func TestMigrateLegacySplitsFiles(t *testing.T) {
 		}
 	}
 
-	got, err := LoadDir(dir)
+	files, err := readDomainFiles(dir)
 	if err != nil {
-		t.Fatalf("LoadDir after migrate: %v", err)
+		t.Fatal(err)
+	}
+	files[DomainCalendars] = stripLegacyCalendars(files[DomainCalendars])
+	got, err := loadFiles(files)
+	if err != nil {
+		t.Fatalf("load after migrate: %v", err)
 	}
 	for _, d := range Domains {
 		if !reflect.DeepEqual(projection(got, d), projection(want, d)) {
@@ -214,7 +219,7 @@ func TestMigrateKeepsBackupAndUnknownKeys(t *testing.T) {
 	if !strings.Contains(app, "ollama:") || !strings.Contains(app, "# unknown key, stays") {
 		t.Errorf("unknown key or its comment dropped:\n%s", app)
 	}
-	for _, gone := range []string{"password_hash", "session_token", "username", "working_hours", "accounts"} {
+	for _, gone := range []string{"password_hash", "session_token", "username", "working_hours", "sources"} {
 		if strings.Contains(app, gone) {
 			t.Errorf("config.yaml still contains %q:\n%s", gone, app)
 		}
@@ -288,7 +293,7 @@ func TestMigrateCredentialsOnly(t *testing.T) {
 
 func TestMigrateRefusesToOverwriteCalendars(t *testing.T) {
 	dir := writeLegacy(t, legacyYAML)
-	if err := os.WriteFile(filepath.Join(dir, "calendars.yaml"), []byte("accounts: []\n"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "calendars.yaml"), []byte("sources: []\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	before := snapshotFiles(t, dir)
@@ -659,10 +664,18 @@ writeback:
 	if _, err := MigrateLegacy(dir); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := LoadStart(dir); err != nil {
-		t.Fatalf("LoadStart after migration: %v", err)
+	// The sources moved verbatim into calendars.yaml, obsolete keys included.
+	cal := readFile(t, filepath.Join(dir, "calendars.yaml"))
+	for _, want := range []string{"sources:", "id: work-google", "writeback: true", "cross_busy: false"} {
+		if !strings.Contains(cal, want) {
+			t.Errorf("calendars.yaml lost %q:\n%s", want, cal)
+		}
 	}
-	if _, err := LoadDir(dir); err != nil {
-		t.Fatalf("LoadDir after migration: %v", err)
+	// Task 4: extend to run MigrateCalendarModel and assert the converted load.
+	// Until then a calendars.yaml with a top-level sources key fails to load,
+	// naming the key.
+	_, err := LoadDir(dir)
+	if err == nil || !strings.Contains(err.Error(), `"sources"`) || !strings.Contains(err.Error(), "restart") {
+		t.Fatalf("LoadDir = %v, want the legacy sources error", err)
 	}
 }

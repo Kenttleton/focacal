@@ -64,9 +64,6 @@ func TestValidateCalendarsRules(t *testing.T) {
 		"reserved calendar id": {func(c *Config) {
 			c.Calendars = append(c.Calendars, CalendarConfig{ID: "focacal", URL: "https://x/y.ics"})
 		}, "focacal"},
-		"invalid id": {func(c *Config) {
-			c.Calendars[0].ID = "Bad Id"
-		}, "Bad Id"},
 		"input missing calendar": {func(c *Config) {
 			c.Destinations[0].Inputs.Items = append(c.Destinations[0].Inputs.Items, DestinationInput{Calendar: "ghost"})
 		}, `"ghost"`},
@@ -362,5 +359,40 @@ destinations:
 	}
 	if c.Calendars[0].Name != "New" {
 		t.Errorf("name = %q, want New", c.Calendars[0].Name)
+	}
+}
+
+// Hand-written ids that do not match the id shape keep loading; the API
+// refuses to create them but edits around them still work.
+func TestNonConformingIDsLoadButCannotBeCreated(t *testing.T) {
+	dir := t.TempDir()
+	body := "calendars:\n  - id: Work\n    url_env: FOCACAL_W\n  - id: \"a:b\"\n    url_env: FOCACAL_AB\n"
+	if err := os.WriteFile(filepath.Join(dir, "calendars.yaml"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := LoadStart(dir); err != nil {
+		t.Fatalf("hand-written ids must load: %v", err)
+	}
+	svc, _ := newTestService(t, dir)
+	before := snapshotFiles(t, dir)
+	for _, p := range []string{
+		`{"calendars":{"Fresh":{"url_env":"FOCACAL_F"}}}`,
+		`{"calendars":{"x:y":{"url_env":"FOCACAL_F"}}}`,
+	} {
+		if _, err := svc.Patch(DomainCalendars, []byte(p)); !errors.Is(err, ErrValidation) {
+			t.Errorf("%s: err = %v, want ErrValidation", p, err)
+		}
+	}
+	assertFilesUnchanged(t, dir, before)
+	// An unrelated edit to a file holding the odd ids succeeds and keeps them.
+	if _, err := svc.Patch(DomainCalendars, []byte(`{"calendars":{"ok-new":{"url_env":"FOCACAL_OK"}}}`)); err != nil {
+		t.Fatalf("unrelated create: %v", err)
+	}
+	if _, err := svc.Patch(DomainCalendars, []byte(`{"calendars":{"Work":{"name":"Renamed"}}}`)); err != nil {
+		t.Fatalf("edit of an existing odd id: %v", err)
+	}
+	b, _ := os.ReadFile(filepath.Join(dir, "calendars.yaml"))
+	if !strings.Contains(string(b), "id: Work") || !strings.Contains(string(b), "a:b") {
+		t.Errorf("odd ids lost:\n%s", b)
 	}
 }

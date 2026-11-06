@@ -177,8 +177,12 @@ func (s *Service) Patch(d Domain, body []byte) (View, error) {
 				doc = map[string]any{} // comments only
 			}
 		}
+		before := collectionIDs(doc, d)
 		if err := ApplyMergePatch(doc, patch, d.collections()); err != nil {
 			return nil, fmt.Errorf("apply patch to %s: %w", d.File(), err)
+		}
+		if err := checkNewIDs(doc, before, d); err != nil {
+			return nil, err
 		}
 		patched, err := yaml.Marshal(doc)
 		if err != nil {
@@ -223,6 +227,41 @@ func (s *Service) Patch(d Domain, body []byte) (View, error) {
 		_, _ = s.live.Reload()
 	}
 	return s.view(d, saved)
+}
+
+// collectionIDs returns the ids of every collection of d present in doc.
+func collectionIDs(doc map[string]any, d Domain) map[string]map[string]bool {
+	out := map[string]map[string]bool{}
+	for name := range d.collections() {
+		ids := map[string]bool{}
+		list, _ := doc[name].([]any)
+		for _, it := range list {
+			if m, ok := it.(map[string]any); ok {
+				ids[str(m["id"])] = true
+			}
+		}
+		out[name] = ids
+	}
+	return out
+}
+
+// checkNewIDs rejects an id the patch created that does not match ValidID.
+// Ids already in the file keep loading and stay editable even when they do
+// not match (spec section 5), so only new ids are checked.
+func checkNewIDs(doc map[string]any, before map[string]map[string]bool, d Domain) error {
+	for name, was := range before {
+		list, _ := doc[name].([]any)
+		for _, it := range list {
+			m, ok := it.(map[string]any)
+			if !ok {
+				continue
+			}
+			if id := str(m["id"]); !was[id] && !ValidID(id) {
+				return validationf("%s: id %q is invalid: use lowercase letters, digits and dashes, up to 63 characters", name, id)
+			}
+		}
+	}
+	return nil
 }
 
 // rejectEmptyMapKeys refuses an empty key in map-typed values (colors): it

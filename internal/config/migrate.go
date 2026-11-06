@@ -262,6 +262,8 @@ func checkMigrated(dir string, original []byte, out map[Domain][]byte, move map[
 	for d, b := range out {
 		files[d] = b
 	}
+	// Legacy sources are moved verbatim and not decoded here.
+	files[DomainCalendars] = stripLegacyCalendars(files[DomainCalendars])
 	got, err := loadFiles(files)
 	if err != nil {
 		return fmt.Errorf("migrate: migrated files do not load (YAML anchors/aliases across sections are not supported; expand them by hand): %w", err)
@@ -269,7 +271,7 @@ func checkMigrated(dir string, original []byte, out map[Domain][]byte, move map[
 	if err := got.Validate(); err != nil {
 		return fmt.Errorf("migrate: migrated config is invalid: %w", err)
 	}
-	want, err := loadFiles(map[Domain][]byte{DomainApp: original, DomainPlanner: original, DomainCalendars: original})
+	want, err := loadFiles(map[Domain][]byte{DomainApp: original, DomainPlanner: original, DomainCalendars: stripLegacyCalendars(original)})
 	if err != nil {
 		return fmt.Errorf("migrate: %w", err)
 	}
@@ -369,11 +371,44 @@ func exists(p string) (bool, error) {
 func legacyDomainKeys(root *yaml.Node) map[Domain][]string {
 	out := map[Domain][]string{}
 	for _, d := range movedDomains {
+		var names []string
+		if d == DomainCalendars {
+			names = append(names, legacyCalendarKeys...)
+		}
 		for _, dk := range domainKeys[d] {
-			if findKey(root, dk.name) >= 0 {
-				out[d] = append(out[d], dk.name)
+			names = append(names, dk.name)
+		}
+		for _, name := range names {
+			if findKey(root, name) >= 0 {
+				out[d] = append(out[d], name)
 			}
 		}
+	}
+	return out
+}
+
+// legacyCalendarKeys are calendars-domain keys the old single config.yaml
+// had that are no longer in domainKeys. The mover still routes them into
+// calendars.yaml verbatim; MigrateCalendarModel (a later task) converts them.
+var legacyCalendarKeys = []string{"sources"}
+
+// stripLegacyCalendars returns b without its top-level `sources` and
+// `destinations` keys when it holds the legacy `sources` key, whose old-shape
+// content the current decoder rejects. Other input is returned as it is. The
+// migration check uses it so a verbatim move can still be loaded and compared.
+func stripLegacyCalendars(b []byte) []byte {
+	var doc yaml.Node
+	if yaml.Unmarshal(b, &doc) != nil {
+		return b
+	}
+	root := rootMapping(&doc)
+	if root == nil || findKey(root, "sources") < 0 {
+		return b
+	}
+	root.Content = withoutKeys(root, []string{"sources", "destinations"}).Content
+	out, err := encodeYAML(&doc)
+	if err != nil {
+		return b
 	}
 	return out
 }

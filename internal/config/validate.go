@@ -152,13 +152,12 @@ var (
 	targetAuthValues = []string{"", "private", "public"}
 )
 
-// checkIDs reports invalid and case-insensitively duplicate ids of one list.
+// checkIDs reports case-insensitively duplicate ids of one list. The id shape
+// (ValidID) is not checked here: hand-written ids that do not match keep
+// loading. Service.Patch enforces it for ids a patch creates.
 func checkIDs(kind string, ids []string, errs *[]error) {
 	seen := map[string]bool{}
 	for _, id := range ids {
-		if !ValidID(id) {
-			*errs = append(*errs, fmt.Errorf("%s id %q is invalid: use lowercase letters, digits and dashes, up to 63 characters", kind, id))
-		}
 		key := strings.ToLower(id)
 		if seen[key] {
 			*errs = append(*errs, fmt.Errorf("duplicate %s id %q", kind, id))
