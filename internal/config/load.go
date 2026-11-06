@@ -33,11 +33,18 @@ func decodeDomain(d Domain, b []byte, into *Config) error {
 	if root.Kind != yaml.MappingNode {
 		return fmt.Errorf("parse %s: top level must be a mapping", d.File())
 	}
+	if d == DomainCalendars {
+		for i := 0; i+1 < len(root.Content); i += 2 {
+			if root.Content[i].Value == "sources" {
+				return fmt.Errorf("%s: the legacy \"sources\" key is no longer supported; restart focacal so it can migrate the file", d.File())
+			}
+		}
+	}
 	own := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
 	for i := 0; i+1 < len(root.Content); i += 2 {
 		for _, dk := range domainKeys[d] {
 			if root.Content[i].Value == dk.name {
-				own.Content = append(own.Content, root.Content[i], dropObsoleteKeys(dk.name, root.Content[i+1]))
+				own.Content = append(own.Content, root.Content[i], renameKeys(dk.name, dropObsoleteKeys(dk.name, root.Content[i+1])))
 			}
 		}
 	}
@@ -84,6 +91,53 @@ func dropObsoleteKeys(key string, v *yaml.Node) *yaml.Node {
 	return v
 }
 
+// renameKeys reads the old per-item key `label` as `name` on accounts,
+// calendars and destinations. When an item has both, name wins and label is
+// dropped. Saves write name only (marshalDomain encodes the typed values).
+func renameKeys(key string, v *yaml.Node) *yaml.Node {
+	switch key {
+	case "accounts", "calendars", "destinations":
+	default:
+		return v
+	}
+	if v.Kind != yaml.SequenceNode {
+		return v
+	}
+	out := *v
+	out.Content = make([]*yaml.Node, len(v.Content))
+	for i, item := range v.Content {
+		out.Content[i] = renameItemKey(item, "label", "name")
+	}
+	return &out
+}
+
+// renameItemKey returns mapping node item with key from renamed to to, or
+// with from dropped when to is already present.
+func renameItemKey(item *yaml.Node, from, to string) *yaml.Node {
+	if item.Kind != yaml.MappingNode {
+		return item
+	}
+	hasTo := false
+	for i := 0; i+1 < len(item.Content); i += 2 {
+		if item.Content[i].Value == to {
+			hasTo = true
+		}
+	}
+	if hasTo {
+		return withoutKeys(item, []string{from})
+	}
+	out := *item
+	out.Content = slices.Clone(item.Content)
+	for i := 0; i+1 < len(out.Content); i += 2 {
+		if out.Content[i].Value == from {
+			k := *out.Content[i]
+			k.Value = to
+			out.Content[i] = &k
+		}
+	}
+	return &out
+}
+
 // withoutKeys returns a copy of mapping node v without the named keys; other
 // nodes are returned as they are.
 func withoutKeys(v *yaml.Node, drop []string) *yaml.Node {
@@ -110,6 +164,7 @@ func loadFiles(files map[Domain][]byte) (*Config, error) {
 		}
 	}
 	cfg.Resolve()
+	cfg.Warnings = cfg.DanglingRefs()
 	return cfg, nil
 }
 

@@ -1,21 +1,57 @@
-# Calendars: sources (accounts read from), destinations and the OAuth redirect.
-# Secrets do not belong here: use ics_url_env / credentials_file references.
+# Calendars: accounts (connections to Google, Outlook or CalDAV), calendars
+# (what Focacal reads), destinations (where Focacal publishes) and the OAuth
+# redirect.
+# Secrets do not belong here: use url_env / credentials_file references.
 # Relative credentials_file / token_file paths resolve under this directory.
 # Edits apply live within about a second. Saving from the UI rewrites this file
 # without comments, so keep notes in your copy of the sample, not the live file.
+# Ids are lowercase letters, digits and dashes, and never change once set.
+# `name` is the display name (the old `label` key still loads as `name`).
 
-# Calendar sources — add one entry per Google or Outlook account.
-sources:
-  - id: "work-google" # unique slug
-    type: "google"
-    calendar_ids: [] # empty = primary calendar only
-    # - id: "personal-outlook"
-    #   type: "outlook"
-    #   calendar_ids: []
-    # - id: "team-feed"
-    #   type: "ics"
-    #   ics_url_env: "FOCACAL_ICS_TEAM_FEED" # feed URL lives in .env; if unset,
-    #                                        # only this calendar fails to sync
+# Accounts: one entry per sign-in. Calendars of one account share its token.
+# accounts:
+#   - id: work-google
+#     name: Work
+#     type: google           # google | outlook | caldav
+#     # credentials_file: secrets/google.json
+
+# Calendars Focacal reads. `account` names an account above; `remote_id` picks
+# the calendar inside it (empty = the connector's default calendar).
+# A calendar is either an account calendar or a read-only feed (url / url_env).
+# calendars:
+#   - id: work
+#     name: Work
+#     account: work-google
+#     remote_id: primary
+#     plan: true             # false = shown, but not planned around
+#   - id: team-feed
+#     name: Team feed
+#     url_env: FOCACAL_ICS_TEAM_FEED  # feed URL lives in .env; if unset,
+#                                     # only this calendar fails to sync
+
+# Destinations: where Focacal publishes. `inputs` is `all` or a list of
+# calendars (plus the built-in `focacal` calendar of planned blocks).
+# `target` is exactly one of a calendar to write to or a served feed.
+# The default destination below serves every calendar plus Focacal's own
+# events as a private feed. Keep it, change it, or add more.
+destinations:
+  - id: focacal
+    name: Focacal
+    inputs: all
+    target:
+      served: true
+      auth: private
+#   # Push a trimmed copy of work and your focus blocks into a calendar:
+#   - id: share-focus
+#     name: Focus on the team calendar
+#     inputs:
+#       - calendar: focacal
+#         kinds: [focus]     # focus | lunch | break
+#       - calendar: work
+#         event:
+#           title: {visibility: true, rename: Busy}
+#     target:
+#       calendar: team-shared
 
 # OAuth redirect base. Defaults shown; uncomment to change. Also configurable
 # via the OAUTH_REDIRECT_BASE_URL env var.

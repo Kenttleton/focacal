@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"testing/fstest"
 
@@ -58,7 +59,20 @@ func TestEmbeddedDefaultsLoad(t *testing.T) {
 	if _, err := SeedDefaults(dir, configexample.FS); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := LoadStart(dir); err != nil {
+	_, running, err := LoadStart(dir)
+	if err != nil {
 		t.Fatalf("seeded defaults do not load: %v", err)
+	}
+	// The sample ships one active default destination; everything else is
+	// commented out.
+	if len(running.Accounts) != 0 || len(running.Calendars) != 0 || len(running.Warnings) != 0 {
+		t.Errorf("sample should have no accounts or calendars: %+v", running.UserConfig)
+	}
+	want := []DestinationConfig{{
+		ID: "focacal", Name: "Focacal", Inputs: InputList{All: true},
+		Target: DestinationTarget{Served: true, Auth: "private"},
+	}}
+	if !reflect.DeepEqual(running.Destinations, want) {
+		t.Errorf("destinations = %+v, want %+v", running.Destinations, want)
 	}
 }

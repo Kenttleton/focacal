@@ -56,7 +56,18 @@ func NewLive(dir string, log *slog.Logger) (*Live, error) {
 	}
 	l := &Live{dir: dir, log: log, server: file.Server}
 	l.snap.Store(&snapshot{file: file, running: running, content: content})
+	l.logWarnings(nil, running.Warnings)
 	return l, nil
+}
+
+// logWarnings logs each warning in cur that prev did not have. Warnings name
+// ids only (see Config.DanglingRefs), never values, so they are safe to log.
+func (l *Live) logWarnings(prev, cur []string) {
+	for _, w := range cur {
+		if !slices.Contains(prev, w) {
+			l.log.Warn("config: " + w + "; the entry is skipped")
+		}
+	}
 }
 
 // Current returns the running config. It is never nil and must be treated as
@@ -123,6 +134,7 @@ func (l *Live) Reload() (changed bool, err error) {
 	l.snap.Store(&snapshot{file: file, running: running, content: content})
 	l.lastErr.Store(nil)
 	changed = !reflect.DeepEqual(old.running, running)
+	l.logWarnings(old.running.Warnings, running.Warnings)
 	if changed {
 		// Handoff: take notifyMu before releasing reloadMu so the next
 		// Reload cannot deliver before this one.

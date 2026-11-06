@@ -3,12 +3,18 @@ package config
 import (
 	"errors"
 	"fmt"
+	"slices"
+	"strconv"
+	"strings"
 	"time"
 )
 
-// Validate checks the whole config and returns a single error listing every problem.
+// Validate checks the whole config as a file load does and returns a single
+// error listing every problem. Calendars use the loose validator: a dangling
+// reference in a hand-edited file is a warning (Config.Warnings), not an
+// error. Service.Patch validates strictly instead.
 func (c *Config) Validate() error {
-	return errors.Join(c.ValidateApp(), c.ValidatePlanner(), c.ValidateCalendars())
+	return errors.Join(c.ValidateApp(), c.ValidatePlanner(), c.ValidateCalendarsLoose())
 }
 
 // ValidateApp checks deployment-level settings: the four server ports must be
@@ -119,63 +125,232 @@ func (c *Config) ValidatePlanner() error {
 	return errors.Join(errs...)
 }
 
-// ValidateCalendars checks accounts, calendars and destinations. Task 2
-// replaces this skeleton with the full validator.
+// ValidateCalendars is the strict calendars validator, used for API changes:
+// structural errors, dangling references and cycles are all errors. Messages
+// name ids and never echo values, since values can be secrets.
 func (c *Config) ValidateCalendars() error {
-	var errs []error
-	dupes := func(kind string, ids []string) {
-		seen := map[string]bool{}
-		for _, id := range ids {
-			if seen[id] {
-				errs = append(errs, fmt.Errorf("duplicate %s id %q", kind, id))
-			}
-			seen[id] = true
-		}
+	errs := c.calendarStructureErrors()
+	for _, m := range c.DanglingRefs() {
+		errs = append(errs, errors.New(m))
 	}
-	var ids []string
-	for _, a := range c.Accounts {
-		ids = append(ids, a.ID)
-		switch a.Type {
-		case "google", "outlook", "caldav":
-		default:
-			errs = append(errs, fmt.Errorf("account %q: unknown type", a.ID))
-		}
-	}
-	dupes("account", ids)
-	ids = nil
-	for _, cal := range c.Calendars {
-		ids = append(ids, cal.ID)
-		if cal.Account == "" && cal.URL == "" && cal.URLEnv == "" {
-			errs = append(errs, fmt.Errorf("calendar %q: needs an account or a url", cal.ID))
-		}
-	}
-	dupes("calendar", ids)
-	ids = nil
-	for _, d := range c.Destinations {
-		ids = append(ids, d.ID)
-	}
-	dupes("destination", ids)
+	errs = append(errs, c.cycleErrors()...)
+	return errors.Join(errs...)
+}
 
-	accounts := map[string]bool{}
+// ValidateCalendarsLoose is ValidateCalendars without the reference errors,
+// used when loading files: a dangling reference is reported through
+// Config.Warnings (see DanglingRefs) and skipped at runtime.
+func (c *Config) ValidateCalendarsLoose() error {
+	errs := c.calendarStructureErrors()
+	errs = append(errs, c.cycleErrors()...)
+	return errors.Join(errs...)
+}
+
+var (
+	accountTypes     = []string{"google", "outlook", "caldav"}
+	focacalKinds     = []string{"focus", "lunch", "break"}
+	targetAuthValues = []string{"", "private", "public"}
+)
+
+// checkIDs reports invalid and case-insensitively duplicate ids of one list.
+func checkIDs(kind string, ids []string, errs *[]error) {
+	seen := map[string]bool{}
+	for _, id := range ids {
+		if !ValidID(id) {
+			*errs = append(*errs, fmt.Errorf("%s id %q is invalid: use lowercase letters, digits and dashes, up to 63 characters", kind, id))
+		}
+		key := strings.ToLower(id)
+		if seen[key] {
+			*errs = append(*errs, fmt.Errorf("duplicate %s id %q", kind, id))
+		}
+		seen[key] = true
+	}
+}
+
+// calendarStructureErrors covers everything that does not depend on another
+// entry existing.
+func (c *Config) calendarStructureErrors() []error {
+	var errs []error
+
+	ids := make([]string, len(c.Accounts))
+	for i, a := range c.Accounts {
+		ids[i] = a.ID
+		if !slices.Contains(accountTypes, a.Type) {
+			errs = append(errs, fmt.Errorf("account %q: unknown type (want google, outlook or caldav)", a.ID))
+		}
+	}
+	checkIDs("account", ids, &errs)
+
+	ids = make([]string, len(c.Calendars))
+	for i, cal := range c.Calendars {
+		ids[i] = cal.ID
+		if strings.EqualFold(cal.ID, FocacalSource) {
+			errs = append(errs, fmt.Errorf("calendar id %q is reserved for the built-in calendar", cal.ID))
+		}
+		hasURL := cal.URL != "" || cal.URLEnv != ""
+		switch {
+		case cal.Account != "" && hasURL:
+			errs = append(errs, fmt.Errorf("calendar %q: set either account or url, not both", cal.ID))
+		case cal.Account == "" && !hasURL:
+			errs = append(errs, fmt.Errorf("calendar %q: needs an account or a url (url_env or url)", cal.ID))
+		}
+	}
+	checkIDs("calendar", ids, &errs)
+
+	cals := make(map[string]CalendarConfig, len(c.Calendars))
+	for _, cal := range c.Calendars {
+		cals[cal.ID] = cal
+	}
+	ids = make([]string, len(c.Destinations))
+	for i, d := range c.Destinations {
+		ids[i] = d.ID
+		for _, in := range d.Inputs.Items {
+			if len(in.Kinds) == 0 {
+				continue
+			}
+			if in.Calendar != FocacalSource {
+				errs = append(errs, fmt.Errorf("destination %q: kinds applies only to the focacal input", d.ID))
+				continue
+			}
+			for _, k := range in.Kinds {
+				if !slices.Contains(focacalKinds, k) {
+					errs = append(errs, fmt.Errorf("destination %q: kinds must be focus, lunch or break", d.ID))
+					break
+				}
+			}
+		}
+
+		t := d.Target
+		switch {
+		case t.Calendar != "" && t.Served:
+			errs = append(errs, fmt.Errorf("destination %q: target must be a calendar or served, not both", d.ID))
+		case t.Calendar == "" && !t.Served:
+			errs = append(errs, fmt.Errorf("destination %q: target needs a calendar or served: true", d.ID))
+		}
+		if t.Calendar != "" {
+			if cal, ok := cals[t.Calendar]; ok && cal.Account == "" && (cal.URL != "" || cal.URLEnv != "") {
+				errs = append(errs, fmt.Errorf("destination %q: target calendar %q is a read-only url feed and cannot be written", d.ID, t.Calendar))
+			}
+		}
+		if !slices.Contains(targetAuthValues, t.Auth) {
+			errs = append(errs, fmt.Errorf("destination %q: target auth must be private or public", d.ID))
+		}
+		if t.Auth == "public" {
+			errs = append(errs, fmt.Errorf("destination %q: auth public is not available yet", d.ID))
+		}
+		if t.Auth != "" && !t.Served {
+			errs = append(errs, fmt.Errorf("destination %q: auth applies only to a served target", d.ID))
+		}
+	}
+	checkIDs("destination", ids, &errs)
+	return errs
+}
+
+// DanglingRefs lists references to entries that do not exist: a calendar
+// naming a missing account, a destination input or target naming a missing
+// calendar. Each message names ids only. The strict validator reports them as
+// errors; a file load keeps them as Config.Warnings and the runtime skips the
+// entries.
+func (c *Config) DanglingRefs() []string {
+	accounts := make(map[string]bool, len(c.Accounts))
 	for _, a := range c.Accounts {
 		accounts[a.ID] = true
 	}
 	cals := map[string]bool{FocacalSource: true}
 	for _, cal := range c.Calendars {
 		cals[cal.ID] = true
+	}
+	var out []string
+	for _, cal := range c.Calendars {
 		if cal.Account != "" && !accounts[cal.Account] {
-			errs = append(errs, fmt.Errorf("calendar %q: no account %q", cal.ID, cal.Account))
+			out = append(out, fmt.Sprintf("calendar %q: account %q does not exist", cal.ID, cal.Account))
 		}
 	}
 	for _, d := range c.Destinations {
 		for _, in := range d.Inputs.Items {
 			if !cals[in.Calendar] {
-				errs = append(errs, fmt.Errorf("destination %q: no calendar %q", d.ID, in.Calendar))
+				out = append(out, fmt.Sprintf("destination %q: input calendar %q does not exist", d.ID, in.Calendar))
 			}
 		}
 		if d.Target.Calendar != "" && !cals[d.Target.Calendar] {
-			errs = append(errs, fmt.Errorf("destination %q: no calendar %q", d.ID, d.Target.Calendar))
+			out = append(out, fmt.Sprintf("destination %q: target calendar %q does not exist", d.ID, d.Target.Calendar))
 		}
 	}
-	return errors.Join(errs...)
+	return out
+}
+
+type cycleEdge struct{ to, dest string }
+
+// cycleErrors reports a cycle in the graph with an edge from each input
+// calendar to the target calendar of its destination (inputs: all expanded;
+// focacal has no incoming edge, a served target has no outgoing one). It
+// reports the first cycle found, naming the destinations on it.
+func (c *Config) cycleErrors() []error {
+	edges := map[string][]cycleEdge{}
+	var nodes []string
+	for _, d := range c.Destinations {
+		if d.Target.Calendar == "" {
+			continue
+		}
+		for _, in := range c.ExpandInputs(d) {
+			if in.Calendar == FocacalSource {
+				continue
+			}
+			if _, ok := edges[in.Calendar]; !ok {
+				nodes = append(nodes, in.Calendar)
+			}
+			edges[in.Calendar] = append(edges[in.Calendar], cycleEdge{to: d.Target.Calendar, dest: d.ID})
+		}
+	}
+	slices.Sort(nodes)
+
+	const (
+		visiting = 1
+		done     = 2
+	)
+	state := map[string]int{}
+	var path []string // node ids on the DFS stack
+	var via []string  // destination ids on the stack edges: via[i] leads path[i] to path[i+1]
+	var found []string
+	var visit func(n string) bool
+	visit = func(n string) bool {
+		state[n] = visiting
+		path = append(path, n)
+		for _, e := range edges[n] {
+			switch state[e.to] {
+			case visiting:
+				start := slices.Index(path, e.to)
+				found = append(slices.Clone(via[start:]), e.dest)
+				return true
+			case 0:
+				via = append(via, e.dest)
+				if visit(e.to) {
+					return true
+				}
+				via = via[:len(via)-1]
+			}
+		}
+		path = path[:len(path)-1]
+		state[n] = done
+		return false
+	}
+	for _, n := range nodes {
+		if state[n] == 0 && visit(n) {
+			break
+		}
+	}
+	if found == nil {
+		return nil
+	}
+	var uniq []string
+	for _, id := range found {
+		if !slices.Contains(uniq, id) {
+			uniq = append(uniq, id)
+		}
+	}
+	quoted := make([]string, len(uniq))
+	for i, id := range uniq {
+		quoted[i] = strconv.Quote(id)
+	}
+	return []error{fmt.Errorf("destinations form a cycle: %s (a destination's target calendar feeds back into its own inputs)", strings.Join(quoted, ", "))}
 }
