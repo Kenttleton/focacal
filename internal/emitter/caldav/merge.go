@@ -46,7 +46,9 @@ func writeEventVEVENT(b *strings.Builder, e *store.Event) {
 	b.WriteString(fmt.Sprintf("SUMMARY:%s\r\n", icsEscape(e.Title)))
 	b.WriteString(fmt.Sprintf("DTSTAMP:%s\r\n", time.Now().UTC().Format(icsTimeFormat)))
 	b.WriteString(fmt.Sprintf("LAST-MODIFIED:%s\r\n", e.SyncedAt.UTC().Format(icsTimeFormat)))
-	b.WriteString(fmt.Sprintf("X-FOCACAL-SOURCE:%s\r\n", icsEscape(e.SourceID)))
+	if e.SourceID != "" {
+		b.WriteString(fmt.Sprintf("X-FOCACAL-SOURCE:%s\r\n", icsEscape(e.SourceID)))
+	}
 	b.WriteString(fmt.Sprintf("X-FOCACAL-TYPE:real\r\n"))
 
 	if e.AllDay {

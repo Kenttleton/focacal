@@ -49,9 +49,9 @@ type DestinationConfig struct {
 
 // DestinationInput is one calendar (or focacal) feeding a destination.
 type DestinationInput struct {
-	Calendar string          `json:"calendar" yaml:"calendar"`
-	Event    EventVisibility `json:"event" yaml:"event,omitempty"`
-	Kinds    []string        `json:"kinds,omitempty" yaml:"kinds,omitempty"` // focus | lunch | break, focacal input only
+	Calendar string           `json:"calendar" yaml:"calendar"`
+	Event    *EventVisibility `json:"event,omitempty" yaml:"event,omitempty"` // nil = full visibility
+	Kinds    []string         `json:"kinds,omitempty" yaml:"kinds,omitempty"` // focus | lunch | break, focacal input only
 }
 
 // DestinationTarget names where a destination publishes: exactly one of a

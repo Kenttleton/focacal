@@ -47,6 +47,11 @@ func writeCal(t *testing.T, dir, body string) {
 // newTestServer returns a handler over a store holding one "work" event, and
 // the live config in dir.
 func newTestServer(t *testing.T, calendars string) (http.Handler, *config.Live, string) {
+	h, live, dir, _ := newTestServerDB(t, calendars)
+	return h, live, dir
+}
+
+func newTestServerDB(t *testing.T, calendars string) (http.Handler, *config.Live, string, *store.DB) {
 	t.Helper()
 	dir := t.TempDir()
 	writeCal(t, dir, calendars)
@@ -62,7 +67,8 @@ func newTestServer(t *testing.T, calendars string) (http.Handler, *config.Live, 
 	now := time.Now()
 	if err := db.UpsertEvent(t.Context(), &store.Event{
 		ID: "work:1", SourceID: "work", CalendarID: "c", UID: "1", Title: "Therapy",
-		Description: "private notes", Start: now.Add(time.Hour), End: now.Add(2 * time.Hour),
+		Description: "private notes", Location: "Room 12", ConferenceURL: "https://meet.test/j/123?pwd=hunter2",
+		Start: now.Add(time.Hour), End: now.Add(2 * time.Hour),
 		Status: "confirmed", SyncedAt: now,
 	}); err != nil {
 		t.Fatal(err)
@@ -71,7 +77,7 @@ func newTestServer(t *testing.T, calendars string) (http.Handler, *config.Live, 
 	h := s.srv.Handler
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h.ServeHTTP(w, r.WithContext(store.WithStore(r.Context(), db)))
-	}), live, dir
+	}), live, dir, db
 }
 
 func do(h http.Handler, method, path string) (int, string) {
@@ -138,20 +144,135 @@ func TestServedAliasWithoutFocacalDestination(t *testing.T) {
 	}
 }
 
-func TestServedCtagTracksProjectedOutput(t *testing.T) {
-	h, _, _ := newTestServer(t, twoFeeds)
-	_, a := do(h, "PROPFIND", "/calendar/busy/")
-	_, b := do(h, "PROPFIND", "/calendar/busy/")
-	_, c := do(h, "PROPFIND", "/calendar/focacal/")
-	tag := func(s string) string {
-		i := strings.Index(s, "<CS:getctag>")
-		if i < 0 {
-			return ""
-		}
-		return s[i : i+strings.Index(s[i:], "</CS:getctag>")]
+func ctagOf(t *testing.T, h http.Handler, path string) string {
+	t.Helper()
+	_, body := do(h, "PROPFIND", path)
+	i := strings.Index(body, "<CS:getctag>")
+	if i < 0 {
+		t.Fatalf("no ctag in %s", body)
 	}
-	if tag(a) == "" || tag(a) != tag(b) || tag(a) == tag(c) {
-		t.Errorf("ctags: busy=%q busy2=%q full=%q", tag(a), tag(b), tag(c))
+	return body[i : i+strings.Index(body[i:], "</CS:getctag>")]
+}
+
+func TestServedCtagTracksProjectedOutput(t *testing.T) {
+	h, _, _, db := newTestServerDB(t, twoFeeds)
+	busy1, full1 := ctagOf(t, h, "/calendar/busy/"), ctagOf(t, h, "/calendar/focacal/")
+	if busy1 != ctagOf(t, h, "/calendar/busy/") || busy1 == full1 {
+		t.Fatalf("ctag must be stable and per feed: %q %q", busy1, full1)
+	}
+	// Change only a field the busy feed hides: its ctag holds, the full one moves.
+	start := time.Now().Add(time.Hour).Truncate(time.Second)
+	synced := time.Now().Truncate(time.Second)
+	ev := &store.Event{ID: "work:1", SourceID: "work", CalendarID: "c", UID: "1", Title: "Therapy",
+		Start: start, End: start.Add(time.Hour), Status: "confirmed", SyncedAt: synced}
+	if err := db.UpsertEvent(t.Context(), ev); err != nil {
+		t.Fatal(err)
+	}
+	busy1, full1 = ctagOf(t, h, "/calendar/busy/"), ctagOf(t, h, "/calendar/focacal/")
+	ev.Description = "different notes"
+	ev.Location = "Room 99"
+	if err := db.UpsertEvent(t.Context(), ev); err != nil {
+		t.Fatal(err)
+	}
+	if got := ctagOf(t, h, "/calendar/busy/"); got != busy1 {
+		t.Errorf("hidden-field change moved the busy ctag: %q -> %q", busy1, got)
+	}
+	if got := ctagOf(t, h, "/calendar/focacal/"); got == full1 {
+		t.Error("visible-field change did not move the full ctag")
+	}
+	// Change something the busy feed shows: the time.
+	ev.Start = ev.Start.Add(time.Hour)
+	ev.End = ev.End.Add(time.Hour)
+	if err := db.UpsertEvent(t.Context(), ev); err != nil {
+		t.Fatal(err)
+	}
+	if got := ctagOf(t, h, "/calendar/busy/"); got == busy1 {
+		t.Error("time change did not move the busy ctag")
+	}
+}
+
+const leakFeeds = `calendars:
+  - id: zz-secretcal
+    name: Work
+    url: https://feed.test/work.ics
+destinations:
+  - id: full
+    inputs: all
+    target: {served: true}
+  - id: titlehidden
+    inputs:
+      - calendar: zz-secretcal
+        event:
+          title: {visibility: false}
+          body: {visibility: true}
+    target: {served: true}
+  - id: bodyhidden
+    inputs:
+      - calendar: zz-secretcal
+        event:
+          title: {visibility: true}
+          body: {visibility: false}
+    target: {served: true}
+`
+
+// A feed that hides the title or body must not leak the trimmed event through
+// location, meeting link, uid or source marker; a full feed is unchanged.
+func TestHiddenFeedsDoNotLeakEventFields(t *testing.T) {
+	dir := t.TempDir()
+	writeCal(t, dir, leakFeeds)
+	live, err := config.NewLive(dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := store.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	now := time.Now()
+	id := store.EventID("zz-secretcal", "cal", "upstream-uid-777")
+	if err := db.UpsertEvent(t.Context(), &store.Event{
+		ID: id, SourceID: "zz-secretcal", CalendarID: "cal", UID: "upstream-uid-777", Title: "Therapy",
+		Description: "notes", Location: "Room 12", ConferenceURL: "https://meet.test/j/1?pwd=hunter2",
+		Start: now.Add(time.Hour), End: now.Add(2 * time.Hour), Status: "confirmed", SyncedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h := New("127.0.0.1:0", live, nil).srv.Handler
+	get := func(p string) string {
+		r := httptest.NewRequest("GET", p, nil).WithContext(store.WithStore(t.Context(), db))
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		return w.Body.String()
+	}
+	full := get("/calendar/full/")
+	for _, want := range []string{"LOCATION:Room 12", "hunter2", "UID:" + id, "X-FOCACAL-SOURCE:zz-secretcal"} {
+		if !strings.Contains(full, want) {
+			t.Errorf("full feed lost %q:\n%s", want, full)
+		}
+	}
+	var uids []string
+	for _, name := range []string{"titlehidden", "bodyhidden"} {
+		body := get("/calendar/" + name + "/")
+		for _, bad := range []string{"Room 12", "hunter2", "meet.test", "zz-secretcal", "upstream-uid-777", "X-FOCACAL-SOURCE", id} {
+			if strings.Contains(body, bad) {
+				t.Errorf("%s feed leaks %q:\n%s", name, bad, body)
+			}
+		}
+		if !strings.Contains(body, "UID:") {
+			t.Errorf("%s feed has no uid", name)
+		}
+		for _, l := range strings.Split(body, "\r\n") {
+			if strings.HasPrefix(l, "UID:") {
+				uids = append(uids, l)
+			}
+		}
+		if again := get("/calendar/" + name + "/"); !strings.Contains(again, uids[len(uids)-1]) {
+			t.Errorf("%s uid is not stable across requests", name)
+		}
+	}
+	if len(uids) == 2 && uids[0] == uids[1] {
+		t.Error("uid must depend on the destination")
 	}
 }
 

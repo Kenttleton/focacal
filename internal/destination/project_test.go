@@ -150,7 +150,7 @@ func TestProjectDoesNotMutateInputs(t *testing.T) {
 	d := decodeDest(t, "id: o\ninputs:\n  - calendar: work\n    event:\n      title: {visibility: false}\ntarget: {served: true}\n")
 	e := ev("work", "Real")
 	b := &store.Block{ID: "1", Type: store.BlockFocus, Title: "Focus"}
-	d.Inputs.Items = append(d.Inputs.Items, config.DestinationInput{Calendar: "focacal", Event: config.EventVisibility{Title: config.FieldVisibility{Rename: "X"}}})
+	d.Inputs.Items = append(d.Inputs.Items, config.DestinationInput{Calendar: "focacal", Event: &config.EventVisibility{Title: config.FieldVisibility{Rename: "X"}}})
 	got, gb := Project(cfg, d, []*store.Event{e}, []*store.Block{b})
 	if e.Title != "Real" || e.Description != "secret body" || b.Title != "Focus" {
 		t.Errorf("inputs mutated: %+v %+v", e, b)

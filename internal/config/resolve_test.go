@@ -117,7 +117,7 @@ func TestExpandInputsAllExcludesTarget(t *testing.T) {
 func TestExpandInputsListDropsUnknown(t *testing.T) {
 	c := &Config{}
 	c.Calendars = []CalendarConfig{{ID: "feed", URL: "https://x/y.ics"}}
-	vis := EventVisibility{Title: FieldVisibility{Visibility: true, Rename: "Busy"}}
+	vis := &EventVisibility{Title: FieldVisibility{Visibility: true, Rename: "Busy"}}
 	d := DestinationConfig{ID: "out", Inputs: InputList{Items: []DestinationInput{
 		{Calendar: "feed", Event: vis},
 		{Calendar: "gone"},

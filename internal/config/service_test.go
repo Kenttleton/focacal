@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go.yaml.in/yaml/v3"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -1110,5 +1111,82 @@ func TestViewsHideSecrets(t *testing.T) {
 	b, _ := json.Marshal(v)
 	if strings.Contains(string(b), "hunter2") || strings.Contains(string(b), "secret.example") {
 		t.Errorf("view leaks a secret: %s", b)
+	}
+}
+
+// A full-visibility input has no event block, and the config view must say so:
+// GET, edit nothing, PATCH the inputs back must not turn it into a hidden one.
+func TestVisibilitySurvivesViewPatchRoundTrip(t *testing.T) {
+	dir := writeTestDir(t)
+	svc, live := newTestService(t, dir)
+	_ = live
+	_, err := svc.Patch(DomainCalendars, []byte(`{"destinations":{"rt":{"inputs":[
+		{"calendar":"work"},
+		{"calendar":"feed","event":{"title":{"visibility":false},"body":{"visibility":false}}}],
+		"target":{"served":true}}}}`), PatchOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := func(label string) {
+		t.Helper()
+		var d *DestinationConfig
+		cfg, err := LoadDir(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := range cfg.Destinations {
+			if cfg.Destinations[i].ID == "rt" {
+				d = &cfg.Destinations[i]
+			}
+		}
+		if d == nil || len(d.Inputs.Items) != 2 {
+			t.Fatalf("%s: destination = %+v", label, d)
+		}
+		if d.Inputs.Items[0].Event != nil {
+			t.Errorf("%s: full input gained an event block: %+v", label, d.Inputs.Items[0].Event)
+		}
+		if e := d.Inputs.Items[1].Event; e == nil || e.Title.Visibility || e.Body.Visibility {
+			t.Errorf("%s: hidden input lost its block: %+v", label, e)
+		}
+	}
+	check("after create")
+
+	view, err := svc.Get(DomainCalendars)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inputs := asMap(t, view)["values"].(map[string]any)["destinations"].(map[string]any)["rt"].(map[string]any)["inputs"]
+	if first := inputs.([]any)[0].(map[string]any); first["event"] != nil {
+		t.Errorf("view shows an event block for a full input: %v", first)
+	}
+	body, err := json.Marshal(map[string]any{"destinations": map[string]any{"rt": map[string]any{"inputs": inputs}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Patch(DomainCalendars, body, PatchOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	check("after view->patch")
+}
+
+func TestEventVisibilityYAMLRoundTrip(t *testing.T) {
+	in := DestinationConfig{ID: "o", Target: DestinationTarget{Served: true}, Inputs: InputList{Items: []DestinationInput{
+		{Calendar: "a"},
+		{Calendar: "b", Event: &EventVisibility{}},
+		{Calendar: "c", Event: &EventVisibility{Title: FieldVisibility{Visibility: true, Rename: "Busy"}}},
+	}}}
+	out, err := yaml.Marshal(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var back DestinationConfig
+	if err := yaml.Unmarshal(out, &back); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(in, back) {
+		t.Errorf("round trip changed the value:\n%s\n%+v\n%+v", out, in, back)
+	}
+	if back.Inputs.Items[0].Event != nil || back.Inputs.Items[1].Event == nil {
+		t.Errorf("nil and explicit all-false must stay distinct: %s", out)
 	}
 }

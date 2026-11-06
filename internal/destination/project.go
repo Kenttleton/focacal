@@ -3,6 +3,9 @@
 package destination
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+
 	"github.com/Kenttleton/focacal/internal/config"
 	"github.com/Kenttleton/focacal/internal/store"
 )
@@ -15,10 +18,10 @@ const HiddenTitle = "Busy"
 // focacal input admits planner blocks, limited to its kinds when set. The
 // inputs are never modified: the result holds copies.
 //
-// An input whose event block is absent (the zero EventVisibility) shows
-// everything. Otherwise a hidden title becomes its rename, or "Busy"; a
+// An input with no event block (nil) shows everything unchanged. Otherwise a hidden title becomes its rename, or "Busy"; a
 // visible title with a rename is replaced by the rename; a hidden body is
-// emptied.
+// emptied. An input that hides either also loses location, meeting link,
+// source marker and original uid (see the loop below).
 func Project(cfg *config.Config, d config.DestinationConfig, events []*store.Event, blocks []*store.Block) ([]*store.Event, []*store.Block) {
 	byCal := map[string]config.DestinationInput{}
 	for _, in := range cfg.ExpandInputs(d) {
@@ -34,8 +37,20 @@ func Project(cfg *config.Config, d config.DestinationConfig, events []*store.Eve
 			continue
 		}
 		c := *e
+		if in.Event != nil && (!in.Event.Title.Visibility || !in.Event.Body.Visibility) {
+			// A trimmed event must not leak through its other fields: the
+			// location and meeting link follow the body, and the id is
+			// replaced by an opaque one with no source marker.
+			c.Location = ""
+			c.ConferenceURL = ""
+			c.CalendarID = ""
+			c.UID = ""
+			c.ICalUID = ""
+			c.SourceID = ""
+			c.ID = opaqueID(d.ID, e.ID)
+		}
 		c.Title = visibleTitle(in.Event, e.Title)
-		if !in.Event.IsFull() && !in.Event.Body.Visibility {
+		if in.Event != nil && !in.Event.Body.Visibility {
 			c.Description = ""
 			c.RawICal = ""
 		}
@@ -62,8 +77,14 @@ func Project(cfg *config.Config, d config.DestinationConfig, events []*store.Eve
 	return outEvents, outBlocks
 }
 
-func visibleTitle(v config.EventVisibility, title string) string {
-	if v.IsFull() {
+// opaqueID is a stable id that reveals neither the calendar nor the upstream uid.
+func opaqueID(destID, eventID string) string {
+	sum := sha256.Sum256([]byte(destID + "\x00" + eventID))
+	return hex.EncodeToString(sum[:16])
+}
+
+func visibleTitle(v *config.EventVisibility, title string) string {
+	if v == nil {
 		return title
 	}
 	if v.Title.Rename != "" {

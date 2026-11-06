@@ -42,7 +42,7 @@ func fullDestination() DestinationConfig {
 		Inputs: InputList{Items: []DestinationInput{
 			{
 				Calendar: "work-google",
-				Event: EventVisibility{
+				Event: &EventVisibility{
 					Title: FieldVisibility{Visibility: true, Rename: "Busy"},
 					Body:  FieldVisibility{Visibility: false, Rename: ""},
 				},

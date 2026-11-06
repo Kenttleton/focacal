@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"os"
 	"time"
-
-	"go.yaml.in/yaml/v3"
 )
 
 // FocacalSource is the built-in source id used for Focacal-generated events.
@@ -163,27 +161,6 @@ func (c ConflictConfig) CountsAllDay() bool {
 type EventVisibility struct {
 	Title FieldVisibility `json:"title" yaml:"title"`
 	Body  FieldVisibility `json:"body" yaml:"body"`
-}
-
-// IsFull reports whether the input shows everything: no event block was
-// configured, so the value is the zero one.
-func (v EventVisibility) IsFull() bool { return v == EventVisibility{} }
-
-// UnmarshalYAML decodes an event block. A block that is present but hides
-// every field would equal the zero value (full visibility) and be dropped by
-// omitempty on save, so it is normalized to the same effect, a hidden title
-// renamed "Busy" and a hidden body, which is not zero.
-func (v *EventVisibility) UnmarshalYAML(n *yaml.Node) error {
-	type plain EventVisibility
-	var p plain
-	if err := n.Decode(&p); err != nil {
-		return err
-	}
-	*v = EventVisibility(p)
-	if v.IsFull() {
-		v.Title.Rename = "Busy"
-	}
-	return nil
 }
 
 // FieldVisibility controls whether and how a field is shown.

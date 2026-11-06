@@ -45,9 +45,9 @@ type legacyDestination struct {
 }
 
 type legacyDestinationItem struct {
-	ID         string          `yaml:"id"`
-	CalendarID string          `yaml:"calendar_id"`
-	Event      EventVisibility `yaml:"event"`
+	ID         string           `yaml:"id"`
+	CalendarID string           `yaml:"calendar_id"`
+	Event      *EventVisibility `yaml:"event"`
 }
 
 // MigrateCalendarModel converts a legacy calendars.yaml in dir (top-level

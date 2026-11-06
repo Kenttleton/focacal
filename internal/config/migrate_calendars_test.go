@@ -293,7 +293,7 @@ destinations:
 	}
 	// The input naming the destination's own target is dropped (a cycle).
 	if len(d.Inputs.Items) != 2 || d.Inputs.Items[0].Calendar != "work" ||
-		!d.Inputs.Items[0].Event.Title.Visibility || d.Inputs.Items[1].Calendar != "focacal" {
+		d.Inputs.Items[0].Event == nil || !d.Inputs.Items[0].Event.Title.Visibility || d.Inputs.Items[1].Calendar != "focacal" {
 		t.Errorf("inputs = %+v", d.Inputs)
 	}
 	if len(cfg.Accounts) != 4 {

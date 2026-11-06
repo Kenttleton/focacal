@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -99,12 +100,12 @@ func (s *Server) handleRedirect(w http.ResponseWriter, r *http.Request) {
 }
 
 // served returns the destinations that publish a feed, in file order.
-func (s *Server) served() []config.DestinationConfig {
-	if s.live == nil {
+func servedOf(cfg *config.Config) []config.DestinationConfig {
+	if cfg == nil {
 		return nil
 	}
 	var out []config.DestinationConfig
-	for _, d := range s.live.Current().Destinations {
+	for _, d := range cfg.Destinations {
 		if d.Target.Served {
 			out = append(out, d)
 		}
@@ -114,7 +115,7 @@ func (s *Server) served() []config.DestinationConfig {
 
 // feedFor resolves a request path to a served destination. listing is true
 // for the /calendar/ home, which lists them all.
-func (s *Server) feedFor(path string) (d config.DestinationConfig, listing, ok bool) {
+func feedFor(cfg *config.Config, path string) (d config.DestinationConfig, listing, ok bool) {
 	var id string
 	switch path {
 	case "/calendar", "/calendar/":
@@ -131,7 +132,7 @@ func (s *Server) feedFor(path string) (d config.DestinationConfig, listing, ok b
 			return d, false, false
 		}
 	}
-	for _, c := range s.served() {
+	for _, c := range servedOf(cfg) {
 		if c.ID == id {
 			return c, false, true
 		}
@@ -148,7 +149,11 @@ func feedName(d config.DestinationConfig) string {
 
 // handleCalDAV handles all CalDAV PROPFIND / REPORT / GET requests.
 func (s *Server) handleCalDAV(w http.ResponseWriter, r *http.Request) {
-	d, listing, ok := s.feedFor(r.URL.Path)
+	var cfg *config.Config // one snapshot for lookup and projection
+	if s.live != nil {
+		cfg = s.live.Current()
+	}
+	d, listing, ok := feedFor(cfg, r.URL.Path)
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -156,16 +161,16 @@ func (s *Server) handleCalDAV(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case "PROPFIND":
 		if listing {
-			s.propfindList(w)
+			s.propfindList(w, cfg)
 			return
 		}
-		s.propfindFeed(w, r, d)
+		s.propfindFeed(w, r, cfg, d)
 	case "REPORT", http.MethodGet:
 		if listing {
-			s.getList(w)
+			s.getList(w, cfg)
 			return
 		}
-		s.serveICS(w, r, d)
+		s.serveICS(w, r, cfg, d)
 	case http.MethodOptions:
 		s.handleOptions(w, r)
 	default:
@@ -179,7 +184,7 @@ func (s *Server) handleOptions(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func feedHref(d config.DestinationConfig) string { return "/calendar/" + d.ID + "/" }
+func feedHref(d config.DestinationConfig) string { return "/calendar/" + url.PathEscape(d.ID) + "/" }
 
 func writeFeedResponse(b *strings.Builder, d config.DestinationConfig, ctag string) {
 	name := html.EscapeString(feedName(d))
@@ -209,10 +214,10 @@ const multistatusOpen = `<?xml version="1.0" encoding="UTF-8"?>
 `
 
 // propfindList lists every served destination as a calendar collection.
-func (s *Server) propfindList(w http.ResponseWriter) {
+func (s *Server) propfindList(w http.ResponseWriter, cfg *config.Config) {
 	var b strings.Builder
 	b.WriteString(multistatusOpen)
-	for _, d := range s.served() {
+	for _, d := range servedOf(cfg) {
 		writeFeedResponse(&b, d, "")
 	}
 	b.WriteString("</multistatus>")
@@ -222,9 +227,9 @@ func (s *Server) propfindList(w http.ResponseWriter) {
 }
 
 // getList is the browsable form of the calendar home.
-func (s *Server) getList(w http.ResponseWriter) {
+func (s *Server) getList(w http.ResponseWriter, cfg *config.Config) {
 	var b strings.Builder
-	for _, d := range s.served() {
+	for _, d := range servedOf(cfg) {
 		fmt.Fprintf(&b, "%s\t%s\n", feedName(d), feedHref(d))
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -233,8 +238,8 @@ func (s *Server) getList(w http.ResponseWriter) {
 
 // propfindFeed answers discovery for one feed, with a ctag that changes when
 // the projected output does.
-func (s *Server) propfindFeed(w http.ResponseWriter, r *http.Request, d config.DestinationConfig) {
-	events, blocks, ok := s.project(w, r, d)
+func (s *Server) propfindFeed(w http.ResponseWriter, r *http.Request, cfg *config.Config, d config.DestinationConfig) {
+	events, blocks, ok := s.project(w, r, cfg, d)
 	if !ok {
 		return
 	}
@@ -247,22 +252,23 @@ func (s *Server) propfindFeed(w http.ResponseWriter, r *http.Request, d config.D
 	io.WriteString(w, b.String())
 }
 
-// ctag hashes everything a feed publishes.
+// ctag hashes the content a feed publishes. Sync timestamps are left out so a
+// resync that changes nothing visible does not make clients refetch.
 func ctag(events []*store.Event, blocks []*store.Block) string {
 	h := sha256.New()
 	for _, e := range events {
-		fmt.Fprintf(h, "e|%s|%s|%s|%s|%d|%d|%t|%s|%s|%d\n", e.ID, e.SourceID, e.Title, e.Description,
-			e.Start.UnixNano(), e.End.UnixNano(), e.AllDay, e.Status, e.Location, e.SyncedAt.UnixNano())
+		fmt.Fprintf(h, "e|%s|%s|%s|%s|%d|%d|%t|%s|%s|%s\n", e.ID, e.SourceID, e.Title, e.Description,
+			e.Start.UnixNano(), e.End.UnixNano(), e.AllDay, e.Status, e.Location, e.ConferenceURL)
 	}
 	for _, b := range blocks {
-		fmt.Fprintf(h, "b|%s|%s|%s|%d|%d|%d\n", b.ID, b.Type, b.Title, b.Start.UnixNano(), b.End.UnixNano(), b.UpdatedAt.UnixNano())
+		fmt.Fprintf(h, "b|%s|%s|%s|%d|%d\n", b.ID, b.Type, b.Title, b.Start.UnixNano(), b.End.UnixNano())
 	}
 	return hex.EncodeToString(h.Sum(nil))[:16]
 }
 
 // project reads the feed window from the store and projects it through d. On
 // failure it has already answered the request.
-func (s *Server) project(w http.ResponseWriter, r *http.Request, d config.DestinationConfig) ([]*store.Event, []*store.Block, bool) {
+func (s *Server) project(w http.ResponseWriter, r *http.Request, cfg *config.Config, d config.DestinationConfig) ([]*store.Event, []*store.Block, bool) {
 	ctx := r.Context()
 	now := time.Now()
 	from := now.AddDate(0, 0, -7)
@@ -271,23 +277,23 @@ func (s *Server) project(w http.ResponseWriter, r *http.Request, d config.Destin
 	db := store.FromContext(ctx)
 	events, err := db.ListEvents(ctx, from, to)
 	if err != nil {
-		s.log.Error("list events for ICS", "destination", d.ID)
+		s.log.Error("list events for ICS", "destination", d.ID, "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return nil, nil, false
 	}
 	blocks, err := db.ListBlocks(ctx, from, to)
 	if err != nil {
-		s.log.Error("list blocks for ICS", "destination", d.ID)
+		s.log.Error("list blocks for ICS", "destination", d.ID, "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return nil, nil, false
 	}
-	events, blocks = destination.Project(s.live.Current(), d, events, blocks)
+	events, blocks = destination.Project(cfg, d, events, blocks)
 	return events, blocks, true
 }
 
 // serveICS builds and serves one destination's calendar.
-func (s *Server) serveICS(w http.ResponseWriter, r *http.Request, d config.DestinationConfig) {
-	events, blocks, ok := s.project(w, r, d)
+func (s *Server) serveICS(w http.ResponseWriter, r *http.Request, cfg *config.Config, d config.DestinationConfig) {
+	events, blocks, ok := s.project(w, r, cfg, d)
 	if !ok {
 		return
 	}
