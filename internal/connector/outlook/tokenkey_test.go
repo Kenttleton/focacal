@@ -43,7 +43,7 @@ func TestOutlookUsesTokenKey(t *testing.T) {
 			if err := db.SetOAuthToken(ctx, tc.key, ""); err != nil {
 				t.Fatal(err)
 			}
-			if err := c.persistToken(ctx, nil2token()); err != nil {
+			if err := c.persistToken(ctx, sampleToken()); err != nil {
 				t.Fatal(err)
 			}
 			if got, _ := db.GetOAuthToken(ctx, tc.key); got == "" {
@@ -73,4 +73,4 @@ func TestOutlookClientCredentialsFollowAccount(t *testing.T) {
 	}
 }
 
-func nil2token() *oauth2.Token { return &oauth2.Token{AccessToken: "a", RefreshToken: "r"} }
+func sampleToken() *oauth2.Token { return &oauth2.Token{AccessToken: "a", RefreshToken: "r"} }

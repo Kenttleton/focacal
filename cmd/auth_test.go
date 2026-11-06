@@ -14,12 +14,14 @@ func authCfg() *config.Config {
 		{ID: "home", Type: "outlook"},
 		{ID: "dav", Type: "caldav"},
 		{ID: "empty", Type: "google"},
+		{ID: "both", Type: "google"},
 	}
 	c.Calendars = []config.CalendarConfig{
 		{ID: "work-team", Account: "work", RemoteID: "team@x"},
 		{ID: "work-main", Account: "work"},
 		{ID: "home-cal", Account: "home"},
 		{ID: "dav-cal", Account: "dav"},
+		{ID: "both", Account: "home", RemoteID: "x"}, // same spelling as the account "both"
 		{ID: "feed", URL: "https://x.example/a.ics"},
 	}
 	c.Resolve()
@@ -37,6 +39,7 @@ func TestAuthCmdResolvesAccountOrCalendarID(t *testing.T) {
 		{"google", "work-main", "work-main", "work"}, // calendar id of an OAuth account
 		{"outlook", "home", "home-cal", "home"},
 		{"google", "empty", "empty", "empty"}, // account without calendars
+		{"google", "both", "both", "both"},    // account wins over the calendar of the same id
 	} {
 		got, err := findAuthSource(cfg, tc.provider, tc.id)
 		if err != nil {

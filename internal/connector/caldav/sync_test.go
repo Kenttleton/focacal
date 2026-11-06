@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -101,8 +102,33 @@ func TestCalDAVRemoteIDMatchesWholePath(t *testing.T) {
 		"/home/ab/":        false,
 		"/x/home/a/":       false,
 	} {
-		if got := c.wantCalendar(path); got != want {
+		if got := c.wantCalendar("/home/", path); got != want {
 			t.Errorf("wantCalendar(%q) = %v, want %v", path, got, want)
 		}
+	}
+}
+
+func TestCalDAVRemoteIDForms(t *testing.T) {
+	for _, id := range []string{"a", "A", "/HOME/a", "http://dav.example/home/a/", "/home/%61/"} {
+		if got := syncWith(t, []string{id}); !reflect.DeepEqual(got, []string{"/home/a/"}) {
+			t.Errorf("remote id %q: synced %v, want only /home/a/", id, got)
+		}
+	}
+	if got := syncWith(t, []string{"archive"}); len(got) != 0 {
+		t.Errorf("fragment under another collection synced %v", got)
+	}
+}
+
+func TestCalDAVNoMatchWarnsByCalendarID(t *testing.T) {
+	var buf strings.Builder
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	defer slog.SetDefault(old)
+	if got := syncWith(t, []string{"/secret-remote/"}); len(got) != 0 {
+		t.Fatalf("synced %v, want nothing", got)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "work-a") || strings.Contains(out, "secret-remote") {
+		t.Fatalf("log = %q, want the calendar id and not the remote id", out)
 	}
 }

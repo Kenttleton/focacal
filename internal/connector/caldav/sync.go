@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
+	"net/url"
 	"strings"
 	"time"
 
@@ -37,33 +39,60 @@ func (c *Connector) Sync(ctx context.Context) error {
 		return fmt.Errorf("caldav[%s]: find calendars: %w", c.cfg.ID, err)
 	}
 
+	matched := 0
 	for _, cal := range calendars {
-		if !c.wantCalendar(cal.Path) {
+		if !c.wantCalendar(homeSet, cal.Path) {
 			continue
 		}
+		matched++
 		if err := c.syncCalendar(ctx, client, cal.Path); err != nil {
 			return fmt.Errorf("caldav[%s]: sync %q: %w", c.cfg.ID, cal.Path, err)
 		}
 	}
+	if len(c.cfg.CalendarIDs) > 0 && matched == 0 {
+		// Name the calendar only: the remote id may be a URL with credentials.
+		slog.Warn("caldav calendar matches no collection on the server; nothing synced", "calendar", c.cfg.ID)
+	}
 	return nil
+}
+
+// remotePath resolves a configured remote id to a collection path the way the
+// write path does: an absolute URL is reduced to its path, a path starting
+// with "/" is used as is, and anything else is a fragment under the home set.
+func remotePath(homeSet, id string) string {
+	if u, err := url.Parse(id); err == nil && u.Scheme != "" && u.Host != "" {
+		return u.EscapedPath()
+	}
+	if strings.HasPrefix(id, "/") {
+		return id
+	}
+	return strings.TrimSuffix(homeSet, "/") + "/" + id + "/"
+}
+
+// normPath is the comparison key for a collection path: percent-decoded,
+// lower-cased, trailing slash dropped.
+func normPath(p string) string {
+	if d, err := url.PathUnescape(p); err == nil {
+		p = d
+	}
+	return strings.ToLower(strings.TrimSuffix(p, "/"))
 }
 
 // wantCalendar reports whether the collection at path should be synced.
 //
 // With no CalendarIDs every collection of the home set is synced (the
 // behavior before the calendar model). A resolved calendar carries its remote
-// id in CalendarIDs, and that id is the collection path as the server lists it
-// (the path of the collection under the home set, as returned by
-// FindCalendars). It must equal the collection path; a trailing slash is not
-// significant. A substring match is wrong here: "/home/a/" would also select
-// "/home/a/archive/".
-func (c *Connector) wantCalendar(path string) bool {
+// id in CalendarIDs; it is resolved with remotePath and must EQUAL the
+// collection path (as returned by FindCalendars) after normPath: trailing
+// slash, letter case and percent-encoding are not significant. A substring
+// match is wrong: "/home/a/" would also select "/home/a/archive/".
+func (c *Connector) wantCalendar(homeSet, path string) bool {
 	if len(c.cfg.CalendarIDs) == 0 {
 		return true
 	}
-	p := strings.TrimSuffix(path, "/")
+	p := normPath(path)
 	for _, id := range c.cfg.CalendarIDs {
-		if strings.TrimSuffix(id, "/") == p {
+		if normPath(remotePath(homeSet, id)) == p {
 			return true
 		}
 	}

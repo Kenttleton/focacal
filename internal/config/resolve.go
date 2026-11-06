@@ -59,7 +59,7 @@ func (s SourceConfig) TokenKey() string {
 }
 
 // PlanSourceIDs returns the ids of the resolved sources the planner
-// schedules around. It lives on UserConfig so request-scoped readers that only
+// schedules around. An empty Sources slice means no planner events. It lives on UserConfig so request-scoped readers that only
 // hold a UserConfig (the MCP tools) can use it; Config inherits it.
 func (c *UserConfig) PlanSourceIDs() map[string]bool {
 	out := make(map[string]bool, len(c.Sources))

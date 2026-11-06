@@ -114,12 +114,9 @@ func (c *Connector) defaultCalendarPath(ctx context.Context) (string, error) {
 	}
 
 	if len(c.cfg.CalendarIDs) > 0 {
-		// CalendarIDs can be either a path fragment or a full path.
-		id := c.cfg.CalendarIDs[0]
-		if strings.HasPrefix(id, "/") {
-			return id, nil
-		}
-		return homeSet + id + "/", nil
+		// CalendarIDs can be a path fragment, a full path or an absolute URL;
+		// remotePath (shared with the sync filter) resolves all three.
+		return remotePath(homeSet, c.cfg.CalendarIDs[0]), nil
 	}
 
 	// Default: use the home set path directly (works for single-calendar servers).
