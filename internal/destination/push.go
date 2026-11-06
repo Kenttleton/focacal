@@ -91,6 +91,7 @@ type item struct {
 	ev        connector.RemoteEvent
 	hash      string
 	hashTrunc string
+	startsAt  time.Time
 	endsAt    time.Time
 }
 
@@ -186,13 +187,13 @@ func (p *Pusher) pushOne(ctx context.Context, id string) (err error) {
 			continue
 		}
 		add(item{key: e.ID, hash: store.FieldHash(e.Title, e.Description, e.Start, e.End),
-			hashTrunc: store.FieldHashTrunc(e.Title, e.Description, e.Start, e.End), endsAt: e.End,
+			hashTrunc: store.FieldHashTrunc(e.Title, e.Description, e.Start, e.End), startsAt: e.Start, endsAt: e.End,
 			ev: connector.RemoteEvent{Title: e.Title, Description: e.Description, Location: e.Location,
 				Start: e.Start, End: e.End, ShowAs: "busy", ManagedTag: true}})
 	}
 	for _, b := range pb {
 		add(item{key: blockKey(b), hash: store.FieldHash(b.Title, "", b.Start, b.End),
-			hashTrunc: store.FieldHashTrunc(b.Title, "", b.Start, b.End), endsAt: b.End,
+			hashTrunc: store.FieldHashTrunc(b.Title, "", b.Start, b.End), startsAt: b.Start, endsAt: b.End,
 			ev: connector.RemoteEvent{Title: b.Title, Start: b.Start, End: b.End, ShowAs: "busy", ManagedTag: true}})
 	}
 
@@ -245,29 +246,31 @@ func (p *Pusher) pushOne(ctx context.Context, id string) (err error) {
 		record(func(c context.Context) error {
 			return p.db.LedgerPut(c, store.LedgerEntry{CalendarID: target, RemoteID: remoteID,
 				DestinationID: d.ID, ItemKey: it.key, Hash: it.hash, HashTrunc: it.hashTrunc,
-				EndsAt: it.endsAt, WrittenAt: p.now()})
+				StartsAt: it.startsAt, EndsAt: it.endsAt, WrittenAt: p.now()})
 		})
 	}
 
-	// Ledger rows the projection no longer produces. One that ended before
-	// the window is history, not a removal: it stays on the remote (and keeps
-	// suppressing its echo) until it is 30 days old, then is forgotten with
-	// no remote delete.
+	// Ledger rows the projection no longer produces. The projection window
+	// filters on start time, so only a row that STARTS at or after the window
+	// start is a removal. Anything else is history and stays on the remote
+	// (still suppressing its echo), including an item that started before the
+	// window and ends inside it; a zero start or end is treated as history too.
+	// A row that ended more than 30 days ago is forgotten with no remote delete.
 	var removals []store.LedgerEntry
 	inWindow := 0
 	for _, le := range ledger {
-		if !le.EndsAt.IsZero() && le.EndsAt.Before(winStart) {
-			if le.EndsAt.Before(now.Add(-forgetAfter)) {
+		if !(le.CalendarID == target && wanted[le.ItemKey]) {
+			if !le.EndsAt.IsZero() && le.EndsAt.Before(now.Add(-forgetAfter)) {
 				le := le
 				record(func(c context.Context) error { return p.db.LedgerDelete(c, le.CalendarID, le.RemoteID) })
+				continue
 			}
-			continue
+			if le.StartsAt.IsZero() || le.EndsAt.IsZero() || le.StartsAt.Before(winStart) {
+				continue
+			}
+			removals = append(removals, le)
 		}
 		inWindow++
-		if le.CalendarID == target && wanted[le.ItemKey] {
-			continue
-		}
-		removals = append(removals, le)
 	}
 	if len(removals) > maxRemovalsUnchecked && len(removals)*2 > inWindow && !configChanged {
 		p.log.Warn("push skipped deletes: too many removals at once", "destination", d.ID)

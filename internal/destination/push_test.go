@@ -652,3 +652,85 @@ func TestReplanWithNewBlockIDsDoesNotChurn(t *testing.T) {
 		t.Fatalf("churn: writes=%d dels=%d", len(w.writes), len(w.dels))
 	}
 }
+
+const outFeed = `  - id: out
+    inputs: [{calendar: feed}]
+    target: {calendar: work}
+`
+
+func (e *env) timedEvent(t *testing.T, uid string, start time.Time, length time.Duration) {
+	t.Helper()
+	if err := e.db.UpsertEvent(context.Background(), &store.Event{ID: store.EventID("feed", "primary", uid), SourceID: "feed",
+		CalendarID: "primary", UID: uid, Title: uid, Start: start, End: start.Add(length), Status: "confirmed"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Ruling 19: the projection window filters on start time, so an item whose
+// start slid out of the window while its end is still inside is history, not
+// a removal. Hourly pushes across the boundary must never delete.
+func TestPusherDoesNotDeleteItemsStraddlingWindowStart(t *testing.T) {
+	e := newEnv(t, baseCfg+outFeed, "work")
+	ctx := context.Background()
+	base := e.now
+	s := base.Add(time.Hour)
+	e.timedEvent(t, "multiday", s, 3*24*time.Hour)
+	e.timedEvent(t, "hour", s, 90*time.Minute)
+	if err := e.p.Notify(ctx); err != nil {
+		t.Fatal(err)
+	}
+	w := e.conns["work"]
+	if len(w.remote) != 2 {
+		t.Fatalf("setup wrote %d", len(w.remote))
+	}
+	// winStart = clock-7d walks from base to base+4h, crossing the start.
+	for h := 0; h <= 4; h++ {
+		e.now = base.Add(7*24*time.Hour + time.Duration(h)*time.Hour)
+		if err := e.p.Notify(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if len(w.dels) != 0 || len(w.remote) != 2 || e.count(t) != 2 {
+			t.Fatalf("step %dh deleted a straddling item: dels=%v remote=%d ledger=%d", h, w.dels, len(w.remote), e.count(t))
+		}
+	}
+}
+
+func TestPusherDeletesGenuinelyRemovedInWindowItem(t *testing.T) {
+	e := newEnv(t, baseCfg+outFeed, "work")
+	ctx := context.Background()
+	e.timedEvent(t, "m", e.now.Add(time.Hour), time.Hour)
+	if err := e.p.Notify(ctx); err != nil {
+		t.Fatal(err)
+	}
+	_ = e.db.DeleteEvent(ctx, store.EventID("feed", "primary", "m"))
+	if err := e.p.Notify(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(e.conns["work"].dels) != 1 || e.count(t) != 0 {
+		t.Fatal("a removed in-window item must be deleted")
+	}
+}
+
+func TestPusherNeverDeletesRowsWithZeroTimes(t *testing.T) {
+	e := newEnv(t, baseCfg+outFeed, "work")
+	ctx := context.Background()
+	w := e.conns["work"]
+	in := e.now.Add(time.Hour)
+	for i, le := range []store.LedgerEntry{
+		{StartsAt: time.Time{}, EndsAt: in.Add(time.Hour)},
+		{StartsAt: in, EndsAt: time.Time{}},
+	} {
+		id := fmt.Sprintf("r%d", i)
+		w.remote[id] = connector.RemoteEvent{}
+		le.CalendarID, le.RemoteID, le.DestinationID, le.ItemKey, le.Hash = "work", id, "out", "k"+id, "h"
+		if err := e.db.LedgerPut(ctx, le); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := e.p.Notify(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(w.dels) != 0 || e.count(t) != 2 {
+		t.Fatalf("zero-time rows deleted: dels=%v ledger=%d", w.dels, e.count(t))
+	}
+}
